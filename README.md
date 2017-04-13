@@ -33,10 +33,10 @@ and replace that function with code that is suitable for your project.
 * Floating point formats are not supported
 * Stream I/O errors are not handled
 * No buffering; all text is printed as soon as available, resulting in multiple calls of the I/O function (but as many bytes are printed with a single call as possible)
-* No file I/O: printing is only supported into a predefined output (such as through serial port), or into a string
+* No file I/O: printing is only supported into a predefined output (such as through serial port), or into a string. Any `FILE*` pointer parameters are completely ignored
 * Data is never copied. Any pointers into strings are expected to be valid throughout the call to the printing function.
 * `snprintf` and `vsnprintf` are not included yet.
 
 ## Rationale
 
-* This module was designed for use with mbed-enabled programming and to do away with any traces of file I/O in the linkage, reducing the binary size.
+* This module was designed for use with mbed-enabled programming, and to remove any dependencies to stdio (specifically FILE stream facilities) in the linkage, reducing the binary size.
