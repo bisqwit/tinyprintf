@@ -35,6 +35,7 @@ and replace that function with code that is suitable for your project.
 * No buffering; all text is printed as soon as available, resulting in multiple calls of the I/O function (but as many bytes are printed with a single call as possible)
 * No file I/O: printing is only supported into a predefined output (such as through serial port), or into a string
 * Data is never copied. Any pointers into strings are expected to be valid throughout the call to the printing function.
+* `snprintf` and `vsnprintf` are not included yet.
 
 ## Rationale
 
