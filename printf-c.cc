@@ -42,8 +42,9 @@ namespace myprintf
         const char* putbegin = nullptr;
         const char* putend   = nullptr;
 
-        char numbuffer[SUPPORT_BINARY_FORMAT ? 66 : 24];
         argument arg;
+
+        char numbuffer[SUPPORT_BINARY_FORMAT ? 65 : 23];
 
         void flush() NOINLINE
         {
@@ -65,8 +66,8 @@ namespace myprintf
         }
         unsigned format_integer(std::int_fast64_t value, bool uns)
         {
-            // Maximum length is ceil(log8(2^64)) + 1 characters + nul = ceil(64/3+2) = 24 characters
-            static_assert(sizeof(numbuffer) >= (SUPPORT_BINARY_FORMAT ? 66 : 24), "Too small numbuffer");
+            // Maximum length is ceil(log8(2^64)) + 1 sign character = ceil(64/3+1) = 23 characters
+            static_assert(sizeof(numbuffer) >= (SUPPORT_BINARY_FORMAT ? 65 : 23), "Too small numbuffer");
 
             char* target = numbuffer;
             bool negative = value < 0 && !uns;
@@ -88,10 +89,15 @@ namespace myprintf
 
             // For integers, the length limit (.xx) has a different meaning:
             // Minimum number of digits printed.
-            if(arg.max_width < sizeof(numbuffer))
+            if(arg.max_width != 65535)
             {
-                if(width < arg.max_width) { width = arg.max_width; } // width can only grow here.
+                if(arg.max_width > width) width = arg.max_width; // width can only grow here.
                 arg.max_width = 65535;
+            }
+            // Range check
+            if(target+width > (numbuffer+sizeof(numbuffer)))
+            {
+                width = (numbuffer+sizeof(numbuffer)) - target;
             }
 
             target += width;
