@@ -16,16 +16,20 @@ static constexpr bool SUPPORT_BINARY_FORMAT = false;
 #endif
 namespace myprintf
 {
+    static_assert(sizeof(std::int_fast64_t) >= sizeof(long long), "We are unable to print longlong types");
+
     struct argument
     {
         unsigned short min_width=0, max_width=65535;
         enum basetype : unsigned char { decimal=10, hex=16,  hexup=16+64,  oct=8, bin=2 } base = decimal;
 
-        unsigned longs:2;
+        unsigned intsize:5;
         bool leftalign:1, zeropad:1, sign:1;
 
+        static_assert(sizeof(long) <= 31, "intsize bitfield is too small");
+
         argument() : min_width(0), max_width(65535),
-                     longs(0), leftalign(false), zeropad(false), sign(false)
+                     intsize(sizeof(int)), leftalign(false), zeropad(false), sign(false)
         {
         }
     };
@@ -166,14 +170,31 @@ namespace myprintf
                 if(*fmt == '*') { state.arg.max_width = va_arg(ap, int); ++fmt; }
                 else while(*fmt >= '0' && *fmt <= '9') { state.arg.max_width = state.arg.max_width*10 + (*fmt++ - '0'); }
             }
-            while(*fmt == 'l') { ++fmt; ++state.arg.longs; }
-            if(*fmt == 'z') { ++fmt; state.arg.longs = 3; }
+            switch(*fmt)
+            {
+                case 't': ++fmt; state.arg.intsize = sizeof(std::ptrdiff_t); break;
+                case 'z': ++fmt; state.arg.intsize = sizeof(std::size_t);    break;
+                case 'l': ++fmt; state.arg.intsize = sizeof(long); if(*fmt != 'l') break; /* passthru */
+                case 'L': ++fmt; state.arg.intsize = sizeof(long long);      break;
+                case 'j': ++fmt; state.arg.intsize = sizeof(std::intmax_t);  break;
+                case 'h': ++fmt; state.arg.intsize = sizeof(short); if(*fmt != 'h') break; /* passthru */
+                          ++fmt; state.arg.intsize = sizeof(char);           break;
+            }
             switch(*fmt)
             {
                 case '\0': goto unexpected;
                 case 'n':
                 {
-                    *va_arg(ap, int*) = state.param - param;
+                    auto value = state.param - param;
+                    if(sizeof(long) != sizeof(long long)
+                    && state.arg.intsize == sizeof(long long)) { *va_arg(ap, long long*) = value; }
+                    else if(sizeof(int) != sizeof(long)
+                         && state.arg.intsize == sizeof(long)) { *va_arg(ap, long*) = value; }
+                    else if(sizeof(int) != sizeof(short)
+                         && state.arg.intsize == sizeof(short)) { *va_arg(ap, short*) = value; }
+                    else if(sizeof(int) != sizeof(char)
+                         && state.arg.intsize == sizeof(char)) { *va_arg(ap, signed char*) = value; }
+                    else                                       { *va_arg(ap, int*) = value; }
                     break;
                 }
                 case 's':
@@ -188,7 +209,7 @@ namespace myprintf
                     state.format_string(state.numbuffer, 1);
                     break;
                 }
-                case 'p': { state.format_string(spacebuffer+15, 2);/*0x*/ state.arg.longs = (sizeof(void*)&8) ? 2 : 0; /*passthru hex*/ }
+                case 'p': { state.format_string(spacebuffer+15, 2);/*0x*/ state.arg.intsize = sizeof(void*); /*passthru hex*/ }
                 case 'x': { state.arg.base = argument::hex;   goto got_int; }
                 case 'X': { state.arg.base = argument::hexup; goto got_int; }
                 case 'o': { state.arg.base = argument::oct;   goto got_int; }
@@ -198,13 +219,17 @@ namespace myprintf
                 got_int:;
                     std::int_fast64_t value = 0;
                     bool      uns   = state.arg.base != argument::decimal || *fmt == 'u';
-                    switch(state.arg.longs)
-                    {
-                        case 0: value = va_arg(ap, int);          if(uns) { value = (unsigned)value;      } break;
-                        case 1: value = va_arg(ap, long);         if(uns) { value = (unsigned long)value; } break;
-                        case 2: value = va_arg(ap, long long);    uns = true; break;
-                        case 3: value = va_arg(ap, ssize_t); if(uns) { value = (std::size_t)value; } break;
-                    }
+
+                    if(sizeof(long) != sizeof(long long)
+                    && state.arg.intsize == sizeof(long long)) { value = va_arg(ap, long long); }
+                    else if(sizeof(int) != sizeof(long)
+                         && state.arg.intsize == sizeof(long)) { value = va_arg(ap, long); if(uns) value = (unsigned long)value; }
+                    else if(sizeof(int) != sizeof(short)
+                         && state.arg.intsize == sizeof(short)) { value = va_arg(ap, int); if(uns) value = (unsigned short)value; }
+                    else if(sizeof(int) != sizeof(char)
+                         && state.arg.intsize == sizeof(char)) { value = va_arg(ap, int); if(uns) value = (unsigned char)value; }
+                    else                                       { value = va_arg(ap, int); if(uns) value = (unsigned int)value; }
+
                     state.format_string(state.numbuffer, state.format_integer(value, uns));
                     break;
                 }
