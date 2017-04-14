@@ -16,6 +16,7 @@ GNU build tools are probably required.
 
 Compiling with `-ffunction-sections -fdata-sections` and linking with `-Wl,--gc-sections` is strongly recommended.
 Compiling with `-flto` is supported.
+Compiling with `-fbuiltin` is supported.
 
 *IMPORTANT*: You will have to edit printf-c.cc file, locate `wfunc`,
 and replace that function with code that is suitable for your project.
@@ -39,6 +40,7 @@ and replace that function with code that is suitable for your project.
 * No file I/O: printing is only supported into a predefined output (such as through serial port), or into a string. Any `FILE*` pointer parameters are completely ignored
 * Data is never copied. Any pointers into strings are expected to be valid throughout the call to the printing function
 * `snprintf`, `vsnprintf`, `dprintf`, `vdprintf`, `asprintf`, and `vasprintf` are not included yet
+  * Neither are `wprintf`, `fwprintf`, `swprintf`, `vwprintf`, `vfwprintf`, `vswprintf` etc.
 * Padding/cutting widths are limited to 65534 characters
   * The minimum integer digits format modifier (such as %.10d) is limited to 22 digits (or 64 if SUPPORT_BINARY_FORMAT=true)
 
