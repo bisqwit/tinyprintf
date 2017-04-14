@@ -22,10 +22,14 @@ and replace that function with code that is suitable for your project.
 
 ## Features
 
-* Minimal memory use (there is only a single 28-byte array and a few assorted temporary variables)
+* Minimal memory use (there is only a single 24-byte array and a few assorted temporary variables)
+** Memory use is increased to 66 bytes+data if binary formats are enabled
 * The following format types are supported and have the same meaning as in GNU libc printf: `n`, `s`, `c`, `p`, `x`, `X`, `o`, `d`, `u`, `i`, `ld`, `li`, `lu`, `lx`, `lX`, `lo`, `lld`, `lli`, `llu`, `llx`, `llX`, `llo`, `zd`, `zi`, `zu`, `zx`, `zX`, `zo`
+** Formats `b`, `lb`, `llb`, and `zb` are only enabled if a SUPPORT_BINARY_FORMAT is set
 * Width, sign, positioning modifiers are supported according to the standard
-* No length limits (however, maximum padding/cutting width is 65534)
+* Padding/cutting widths are limited to 65534
+** The minimum integer digits format modifier (such as %.10d) is limited to 23 digits (or 65 if SUPPORT_BINARY_FORMAT=true)
+* Re-entrant code (e.g. it is safe to call `sprintf` within your stream I/O function invoked by `printf`)
 
 ## Caveats
 

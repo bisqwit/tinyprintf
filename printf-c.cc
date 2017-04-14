@@ -3,6 +3,8 @@
 #include <cstdarg>
 #include <cstdint>
 
+static constexpr bool SUPPORT_BINARY_FORMAT = false;
+
 #ifdef __GNUC__
  #define NOINLINE   __attribute__((noinline))
  #define USED_FUNC  __attribute__((used,noinline))
@@ -40,10 +42,10 @@ namespace myprintf
         const char* putbegin = nullptr;
         const char* putend   = nullptr;
 
-        char numbuffer[28];
+        char numbuffer[SUPPORT_BINARY_FORMAT ? 66 : 24];
         argument arg;
 
-        void flush() __attribute__((noinline))
+        void flush() NOINLINE
         {
             if(putend != putbegin)
             {
@@ -64,7 +66,7 @@ namespace myprintf
         unsigned format_integer(std::int_fast64_t value, bool uns)
         {
             // Maximum length is ceil(log8(2^64)) + 1 characters + nul = ceil(64/3+2) = 24 characters
-            static_assert(sizeof(numbuffer) >= 24, "Too small numbuffer");
+            static_assert(sizeof(numbuffer) >= (SUPPORT_BINARY_FORMAT ? 66 : 24), "Too small numbuffer");
 
             char* target = numbuffer;
             bool negative = value < 0 && !uns;
@@ -184,7 +186,7 @@ namespace myprintf
                 case 'x': { state.arg.base = argument::hex;   goto got_int; }
                 case 'X': { state.arg.base = argument::hexup; goto got_int; }
                 case 'o': { state.arg.base = argument::oct;   goto got_int; }
-                //case 'b': { state.arg.base = argument::bin;   goto got_int; }
+                case 'b': if(SUPPORT_BINARY_FORMAT) { state.arg.base = argument::bin;   goto got_int; } else { goto got_int; }
                 default:
                 {
                 got_int:;
