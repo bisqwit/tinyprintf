@@ -8,8 +8,8 @@ The functions replaced are `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`
 To use, compile `printf-c.cc` using your C++ compiler, and link it into your project.
 You will have to add the following linker flags:
 
-    -Wl,--wrap,printf  -Wl,--wrap,fiprintf -Wl,--wrap,sprintf  -Wl,--wrap,vsprintf    
-    -Wl,--wrap,fprintf -Wl,--wrap,fflush   -Wl,--wrap,vfprintf -Wl,--wrap,vprintf    
+    -Wl,--wrap,printf  -Wl,--wrap,fprintf  -Wl,--wrap,sprintf  -Wl,--wrap,fiprintf    
+    -Wl,--wrap,vprintf -Wl,--wrap,vfprintf -Wl,--wrap,vsprintf -Wl,--wrap,fflush    
     -Wl,--wrap,puts    -Wl,--wrap,putchar  -Wl,--wrap,fputs    -Wl,--wrap,fwrite    
 
 GNU build tools are probably required.
