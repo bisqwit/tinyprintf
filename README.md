@@ -28,7 +28,7 @@ and replace that function with code that is suitable for your project.
   * Format `b` is only enabled if a SUPPORT_BINARY_FORMAT is set
 * The following length modifiers are supported and have the same meaning as in GNU libc printf: none, `h`, `hh`, `l`, `ll`, `L`, `j`, `z`, and `t`
   * The length modifier also affects the pointer type in `n` format
-* Width, sign, positioning modifiers are supported according to the standard
+* Min-width, min-precision, max-width, sign, space, justification modifiers are supported according to the standard
 * Re-entrant code (e.g. it is safe to call `sprintf` within your stream I/O function invoked by `printf`)
 * Compatible with GCC’s optimizations where e.g. `printf("abc\n")` is automatically converted into `puts("abc")`
 
@@ -47,10 +47,11 @@ and replace that function with code that is suitable for your project.
 Note that any of the following traits may change in future releases.
 
 * Positional parameters (e.g. `%5$d`) are not supported
-* Floating point formats (such as `e`, `E`, `f`, `F`, `g`, `G`, `a`, and `A`) are not supported
-* The `#`, ` ` (space), `'`, and `I` flag characters are not supported
-* Length modifiers are parsed, but ignored for `s`, `c` and `p` format types
-* The `n` format type ignores the padding and cutting width modifiers
+* Floating point formats (`e`, `E`, `f`, `F`, `g`, `G`, `a`, and `A`) are not supported
+* The `#`, `'`, and `I` flag characters are not supported
+* Length modifiers are ignored for `s`, `c` and `p` format types
+  * I.e. `wchar_t` strings or `wint_t` chars are not supported.
+* Flags and width modifiers are ignored for the `n` format type
 * Any other format type than `n`, `s`, `c`, `p`, `x`, `X`, `o`, or `b` is treated as if `d` was used
   * `d` and `i` are equivalent and have the same meaning
   * This includes unsupported combinations and permutations of length modifier letters
