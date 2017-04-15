@@ -23,8 +23,8 @@ and replace that function with code that is suitable for your project.
 
 ## Features
 
-* Minimal memory use (there are two arrays for a total of 28 bytes, and a few assorted temporary variables)
-  * Memory use is increased to 70 bytes+misc if binary formats are enabled
+* Minimal memory use (there are two arrays for a total of 22 bytes, and a few assorted temporary variables)
+  * Memory use is increased to 64 bytes+misc if binary formats are enabled
 * The following format types are supported and have the same meaning as in
 * GNU libc printf: `n`, `s`, `c`, `p`, `x`, `X`, `o`, `d`, `u`, and `i`
   * Format `b` is only enabled if a SUPPORT_BINARY_FORMAT is set
@@ -42,7 +42,7 @@ and replace that function with code that is suitable for your project.
 * Data is never copied. Any pointers into strings are expected to be valid throughout the call to the printing function
 * `snprintf`, `vsnprintf`, `dprintf`, `vdprintf`, `asprintf`, and `vasprintf` are not included yet
   * Neither are `wprintf`, `fwprintf`, `swprintf`, `vwprintf`, `vfwprintf`, `vswprintf` etc.
-* Padding/cutting widths are limited to 65534 characters
+* Padding/cutting widths are limited to 4294967294 characters
   * The minimum integer digits format modifier (such as %.10d) is limited to 22 digits (or 64 if SUPPORT_BINARY_FORMAT=true)
 * Behavior differs to GNU libc printf when a nul pointer is printed with `p` or `s` formats and max-width specifier is used
   

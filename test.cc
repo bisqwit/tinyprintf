@@ -14,12 +14,13 @@ static const char flags[][6] = {
     "-0+", "-0 ", "-0#",
     "-+ ", "- #",
     "0+ ", "0+#", "+ #",
-    "-0+ ", "-0+#", "-+ #", "0+ #", "-0+ #"
+    "-0+ ", "-0+#", "-+ #", "0+ #", "-0+ #",
+
+    "--", "00", "++", "  ", "##",
+    "-00", "-++", "- - ", "0  -#", "--+# ", "--0",
 };
 
-static void PrintParams()
-{
-}
+static void PrintParams() { }
 template<typename... Params> static void PrintParams(int arg, Params... rest);
 template<typename... Params> static void PrintParams(long arg, Params... rest);
 template<typename... Params> static void PrintParams(long long arg, Params... rest);
@@ -85,12 +86,13 @@ int _write(int,const unsigned char*,unsigned,unsigned) { return 0; }
 
 int main()
 {
-        for(int wid1mode = 0; wid1mode <= 2; ++wid1mode)
-        for(int wid2mode = 0; wid2mode <= 2; ++wid2mode)
+    RunTest("%%");
+    for(int wid1mode = 0; wid1mode <= 2; ++wid1mode)
+    for(int wid2mode = 0; wid2mode <= 2; ++wid2mode)
     for(auto flag: flags)
     {
-        for(int wid1 = -20; wid1 <= 20; ++wid1)
-        for(int wid2 = -20; wid2 <= 20; ++wid2)
+        for(int wid1 = -22; wid1 <= 22; ++wid1)
+        for(int wid2 = -22; wid2 <= 22; ++wid2)
         {
             if(!wid1mode && wid1) continue;
             if(!wid2mode && wid2) continue;
@@ -199,4 +201,3 @@ int main()
     }
     std::printf("%u tests run, %u tests failed\n", tests_run, tests_failed);
 }
-
