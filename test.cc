@@ -59,6 +59,8 @@ static void PrintParams(const char* arg, Params... rest)
     PrintParams(rest...);
 }
 
+static unsigned tests_failed = 0, tests_run = 0;
+
 template<typename... Params>
 void RunTest(const std::string& formatstr, Params... params)
 {
@@ -73,7 +75,9 @@ void RunTest(const std::string& formatstr, Params... params)
         std::printf(");\n");
         std::printf("- tiny: %d [%s]\n", out1, result1);
         std::printf("- std:  %d [%s]\n", out2, result2);
+        ++tests_failed;
     }
+    ++tests_run;
 }
 extern "C" {
 int _write(int,const unsigned char*,unsigned,unsigned) { return 0; }
@@ -95,16 +99,32 @@ int main()
 
             auto test = [&](const char* format, auto param)
             {
-                if(std::strchr(flag, '0') && (std::strchr(format, 's') || std::strchr(format, 'c')))
+                const char format_char = std::strchr(format, '\0')[-1];
+                const bool zero_pad    = std::strchr(flag, '0');
+                if(zero_pad && (format_char=='s' || format_char=='c'))
                 {
-                    // Skip undefined test
+                    // Skip undefined test (zeropad on strings and chars)
                     return;
                 }
-                if(wid2 == 0 && !std::strchr(format, 's'))
+                /*if(wid2 == 0 && format_char == 'c')
                 {
                     // This differs from libc.
                     return;
+                }*/
+                if(wid2mode && !param && (format_char == 's' || format_char == 'p'))
+                {
+                    // This differs from libc (possibly undefined)
+                    // E.g. printf("%.3s", "")
+                    //        Libc prints "(null)", we print "(nu"
+                    return;
                 }
+                /*if(zero_pad && wid1 && wid2)
+                {
+                    // libc has a bug in this, testing against libc is meaningless
+                    // E.g. printf("%03.1d", 3)
+                    //        Libc prints "  3", we print "003"
+                    return;
+                }*/
 
                 std::string FormatStr;
                 //FormatStr += '{';
@@ -177,5 +197,6 @@ int main()
             test("hhu", int(600000));
         }
     }
+    std::printf("%u tests run, %u tests failed\n", tests_run, tests_failed);
 }
 

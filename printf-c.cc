@@ -118,13 +118,11 @@ namespace myprintf
             char     lett = ((arg.base & 64) ? 'A' : 'a')-10;
 
             unsigned width = 0;
-            for(uintfmt_t uvalue_test = uvalue; ; )
+            for(uintfmt_t uvalue_test = uvalue; uvalue_test != 0; )
             {
                 ++width;
                 uvalue_test /= base;
-                if(uvalue_test == 0) break;
             }
-            // width is at least 1 now.
             if(unlikely(arg.alt) && likely(uvalue != 0))
             {
                 switch(base)
@@ -138,23 +136,32 @@ namespace myprintf
                 prefix_index = prefix_nil; // Discards other prefixes
                 return 0;
             }
-
             // For integers, the length limit (.xx) has a different meaning:
             // Minimum number of digits printed.
             if(unlikely(arg.max_width != 65535))
             {
                 if(arg.max_width > width) width = arg.max_width; // width can only grow here.
                 arg.max_width = 65535;
+                // This setting clears out zeropadding according to standard
+                arg.zeropad = false;
             }
+            else if(width == 0)
+            {
+                // Zero-width is permitted if explicitly specified,
+                // but otherwise we always print at least 1 digit.
+                width = 1;
+            }
+
             // Range check
             if(unlikely(width > sizeof(numbuffer))) width = sizeof(numbuffer);
 
             char* target = numbuffer + width;
             unsigned length = target - numbuffer;
-            do {
+            while(width-- > 0)
+            {
                 unsigned digitvalue = uvalue % base; uvalue /= base;
                 *--target = digitvalue + (digitvalue < 10 ? '0' : lett);
-            } while(--width); // width has a starting value of at least 1.
+            }
             return length;
         }
         void append_spaces(const char* from, unsigned number) NOINLINE
@@ -173,8 +180,8 @@ namespace myprintf
              *
              *    Leftalign Zeropad      Print
              *           no      no      spacebuffer, prefix, source
-             *          yes      no      prefix, source, spacebuffer
-             *          ---     yes      prefix, spacebuffer, source
+             *          yes     ---      prefix, source, spacebuffer
+             *           no     yes      prefix, spacebuffer, source
              */
             char prefixbuffer[6], *prefixend = prefixbuffer; // Max length: "+(nil)" or "(null)" = 6 chars
             if(unlikely(!source)) { length = 0; prefix_index = prefix_null; }
@@ -212,19 +219,19 @@ namespace myprintf
             unsigned pad = arg.min_width > combined_length ? (arg.min_width - combined_length) : 0;
 
             // Choose the right mode
-            if(arg.zeropad)
-            {
-                // Prefix, then spacebuffer, then source
-                append(prefixbuffer, prefixlen);
-                append_spaces(spacebuffer+8, pad);
-                append(source, length);
-            }
-            else if(arg.leftalign)
+            if(arg.leftalign)
             {
                 // Prefix, then source, then spacebuffer
                 append(prefixbuffer, prefixlen);
                 append(source, length);
                 append_spaces(spacebuffer, pad);
+            }
+            else if(arg.zeropad)
+            {
+                // Prefix, then spacebuffer, then source
+                append(prefixbuffer, prefixlen);
+                append_spaces(spacebuffer+8, pad);
+                append(source, length);
             }
             else
             {
@@ -308,6 +315,7 @@ namespace myprintf
                 }
                 case 'c':
                 {
+                    state.arg.max_width = 65535; // Max-width has no effect on %c formats
                     state.numbuffer[0] = va_arg(ap, int);
                     state.format_string(state.numbuffer, 1);
                     break;
