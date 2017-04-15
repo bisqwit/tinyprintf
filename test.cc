@@ -100,6 +100,11 @@ int main()
                     // Skip undefined test
                     return;
                 }
+                if(wid2 == 0 && !std::strchr(format, 's'))
+                {
+                    // This differs from libc.
+                    return;
+                }
 
                 std::string FormatStr;
                 //FormatStr += '{';
@@ -123,14 +128,15 @@ int main()
                 else if(wid2mode == 2)             RunTest(FormatStr, wid2, param);
                 else                               RunTest(FormatStr, param);
             };
+            test("s", (const char*)nullptr);
             test("s", (const char*)"");
             test("s", (const char*)"quix");
             test("s", (const char*)"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
             test("c", int('\0'));
             test("c", int('A'));
             test("c", int(228-256));
-            //test("p", (const void*)nullptr);
-            //test("p", (const void*)0x12345678);
+            test("p", (const void*)nullptr);
+            test("p", (const void*)0x12345678);
             test("d", int(0));
             test("d", int(-600000));
             test("d", int(600000));

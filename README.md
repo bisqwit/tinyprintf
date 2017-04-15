@@ -60,9 +60,7 @@ Note that any of the following traits may change in future releases.
 
 ## Known bugs
 
-* Sign character printed in wrong position, when using zero-fill (applies to negative numbers, but also to positive numbers when `+` or ` ` flags are used)
 * Behavior differs to GNU libc printf when the precision / max-width specifier is given as 0
-* Behavior differs to GNU libc printf when printing nul-pointers with `p` format type
 
 ## Rationale
 
