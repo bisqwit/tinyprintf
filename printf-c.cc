@@ -27,13 +27,13 @@ namespace myprintf
         unsigned short min_width=0, max_width=65535;
         enum basetype : unsigned char { decimal=10, hex=16,  hexup=16+64,  oct=8, bin=2 } base = decimal;
 
-        unsigned intsize:4;
-        bool leftalign:1, zeropad:1, sign:1, space:1;
+        unsigned intsize:3;
+        bool leftalign:1, zeropad:1, sign:1, space:1, alt:1;
 
-        static_assert(sizeof(long long)-1 <= 15, "intsize bitfield is too small");
+        static_assert(sizeof(long long)-1 <= 7, "intsize bitfield is too small");
 
         argument() : min_width(0), max_width(65535),
-                     intsize(sizeof(int)-1), leftalign(false), zeropad(false), sign(false), space(false)
+                     intsize(sizeof(int)-1), leftalign(false), zeropad(false), sign(false), space(false), alt(false)
         {
         }
     };
@@ -78,10 +78,14 @@ namespace myprintf
             static_assert(sizeof(numbuffer) >= (SUPPORT_BINARY_FORMAT ? 65 : 23), "Too small numbuffer");
 
             char* target = numbuffer;
-            bool negative = value < 0 && !uns;
-            if(negative)       { *target++ = '-'; value = -value; }
-            else if(arg.sign)  { *target++ = '+'; }
-            else if(arg.space) { *target++ = ' '; }
+            if(!uns)
+            {
+                bool negative = value < 0;
+                if(negative)       { value = -value; *target = '-'; ++target; }
+                else if(arg.sign)  {                 *target = '+'; ++target; }
+                else if(arg.space) {                 *target = ' '; ++target; }
+                // GNU libc printf ignores '+ ' modifiers on unsigned formats, but not for %p
+            }
 
             uintfmt_t uvalue = value;
             unsigned base = arg.base & 63;
@@ -95,6 +99,11 @@ namespace myprintf
                 if(uvalue_test == 0) break;
             }
             // width is at least 1.
+            if(arg.alt && base != 10 && uvalue != 0)
+            {
+                *target = '0'; ++target;
+                if(base == 16) { *target = lett+('X'-'A'+10); ++target; }
+            }
 
             // For integers, the length limit (.xx) has a different meaning:
             // Minimum number of digits printed.
@@ -162,19 +171,24 @@ namespace myprintf
             if(*++fmt == '%') { goto literal; }
 
             state.arg = argument{};
-            if(*fmt == '-') { state.arg.leftalign = true; ++fmt; }
-            if(*fmt == ' ') { state.arg.space     = true; ++fmt; }
-            if(*fmt == '+') { state.arg.sign      = true; ++fmt; }
-            if(*fmt == '0') { state.arg.zeropad   = true; ++fmt; }
+        moreflags:;
+            switch(*fmt)
+            {
+                case '-': state.arg.leftalign = true; ++fmt; goto moreflags;
+                case ' ': state.arg.space     = true; ++fmt; goto moreflags;
+                case '+': state.arg.sign      = true; ++fmt; goto moreflags;
+                case '#': state.arg.alt       = true; ++fmt; goto moreflags;
+                case '0': state.arg.zeropad   = true; ++fmt; goto moreflags;
+            }
             if(*fmt == '*') { int v = va_arg(ap, int); if(v < 0) { state.arg.leftalign = true; v = -v; } state.arg.min_width = v; ++fmt; }
             else while(*fmt >= '0' && *fmt <= '9') { state.arg.min_width = state.arg.min_width*10 + (*fmt++ - '0'); }
 
             if(*fmt == '.')
             {
                 ++fmt;
-                state.arg.max_width = 0;
-                if(*fmt == '*') { state.arg.max_width = va_arg(ap, int); ++fmt; }
-                else while(*fmt >= '0' && *fmt <= '9') { state.arg.max_width = state.arg.max_width*10 + (*fmt++ - '0'); }
+                if(*fmt == '*') { int v = va_arg(ap, int); if(v >= 0) { state.arg.max_width = v; } ++fmt; }
+                else if(*fmt >= '0' && *fmt <= '9') { state.arg.max_width = 0; do {
+                   state.arg.max_width = state.arg.max_width*10 + (*fmt++ - '0'); } while(*fmt >= '0' && *fmt <= '9'); }
             }
             switch(*fmt)
             {
@@ -215,7 +229,7 @@ namespace myprintf
                     state.format_string(state.numbuffer, 1);
                     break;
                 }
-                case 'p': { state.format_string(spacebuffer+15, 2);/*0x*/ state.arg.intsize = sizeof(void*)-1; /*passthru hex*/ }
+                case 'p': { state.arg.alt = true; state.arg.intsize = sizeof(void*)-1; /*passthru hex*/ }
                 case 'x': { state.arg.base = argument::hex;   goto got_int; }
                 case 'X': { state.arg.base = argument::hexup; goto got_int; }
                 case 'o': { state.arg.base = argument::oct;   goto got_int; }
@@ -235,7 +249,7 @@ namespace myprintf
                     else if(sizeof(int) != sizeof(char)
                          && state.arg.intsize == sizeof(char)-1)  { value = (signed char)va_arg(ap, int); }
                     else                                          { value = va_arg(ap, int); }
-                    if(uns && state.arg.intsize < sizeof(uintfmt_t)-1) { value &= ((uintfmt_t(1) << (state.arg.intsize+1))-1); }
+                    if(uns && state.arg.intsize < sizeof(uintfmt_t)-1) { value &= ((uintfmt_t(1) << (8*(state.arg.intsize+1)))-1); }
 
                     state.format_string(state.numbuffer, state.format_integer(value, uns));
                     break;

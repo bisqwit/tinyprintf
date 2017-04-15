@@ -43,20 +43,26 @@ and replace that function with code that is suitable for your project.
   * Neither are `wprintf`, `fwprintf`, `swprintf`, `vwprintf`, `vfwprintf`, `vswprintf` etc.
 * Padding/cutting widths are limited to 65534 characters
   * The minimum integer digits format modifier (such as %.10d) is limited to 22 digits (or 64 if SUPPORT_BINARY_FORMAT=true)
-
+  
 ## Unsupported syntax
 
 Note that any of the following traits may change in future releases.
 
 * Positional parameters (e.g. `%5$d`) are not supported
 * Floating point formats (`e`, `E`, `f`, `F`, `g`, `G`, `a`, and `A`) are not supported
-* The `#`, `'`, and `I` flag characters are not supported
+* The `'` and `I` flag characters are not supported
 * Length modifiers are ignored for `s`, `c` and `p` format types
   * I.e. `wchar_t` strings or `wint_t` chars are not supported.
 * Flags and width modifiers are ignored for the `n` format type
 * Any other format type than `n`, `s`, `c`, `p`, `x`, `X`, `o`, or `b` is treated as if `d` was used
   * `d` and `i` are equivalent and have the same meaning
   * This includes unsupported combinations and permutations of length modifier letters
+
+## Known bugs
+
+* Sign character printed in wrong position, when using zero-fill (applies to negative numbers, but also to positive numbers when `+` or ` ` flags are used)
+* Behavior differs to GNU libc printf when the precision / max-width specifier is given as 0
+* Behavior differs to GNU libc printf when printing nul-pointers with `p` format type
 
 ## Rationale
 
