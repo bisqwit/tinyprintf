@@ -43,6 +43,7 @@ and replace that function with code that is suitable for your project.
   * Neither are `wprintf`, `fwprintf`, `swprintf`, `vwprintf`, `vfwprintf`, `vswprintf` etc.
 * Padding/cutting widths are limited to 65534 characters
   * The minimum integer digits format modifier (such as %.10d) is limited to 22 digits (or 64 if SUPPORT_BINARY_FORMAT=true)
+* Behavior differs to GNU libc printf when a nul pointer is printed with `p` or `s` formats and max-width specifier is used
   
 ## Unsupported syntax
 
@@ -57,10 +58,6 @@ Note that any of the following traits may change in future releases.
 * Any other format type than `n`, `s`, `c`, `p`, `x`, `X`, `o`, or `b` is treated as if `d` was used
   * `d` and `i` are equivalent and have the same meaning
   * This includes unsupported combinations and permutations of length modifier letters
-
-## Known bugs
-
-* Behavior differs to GNU libc printf when the precision / max-width specifier is given as 0
 
 ## Rationale
 
