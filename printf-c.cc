@@ -4,6 +4,7 @@
 #include <cstdint>
 
 static constexpr bool SUPPORT_BINARY_FORMAT = false;
+static constexpr bool STRICT_COMPLIANCE     = true;
 
 #ifdef __GNUC__
  #define NOINLINE   __attribute__((noinline))
@@ -47,7 +48,8 @@ namespace myprintf
         }
     };
 
-    static const char spacebuffer[8+8+3 + 4+3+3+6+7] {
+    static constexpr unsigned PatternLength = 8;
+    static const char spacebuffer[PatternLength*2 + 3 + 4+2+2+5+6] {
         // eight spaces
         ' ',' ',' ',' ', ' ',' ',' ',' ',
         // eight zeros
@@ -55,17 +57,19 @@ namespace myprintf
         // first three prefixes
         '-','+',' ',
         // last three prefixes
-        4,7,10,16,
-        2,'0','x', 2,'0','X', 5,'(','n','i','l',')', 6,'(','n','u','l','l',')'
+        0x24,0x26,0x58,0x6D,
+        '0','x', '0','X', '(','n','i','l',')', '(','n','u','l','l',')'
     };
 
     static constexpr unsigned char prefix_minus = 0x1;
     static constexpr unsigned char prefix_plus  = 0x2;
     static constexpr unsigned char prefix_space = 0x3;
-    static constexpr unsigned char prefix_0x    = 0x4;
-    static constexpr unsigned char prefix_0X    = 0x8;
-    static constexpr unsigned char prefix_nil   = 0xC;
-    static constexpr unsigned char prefix_null  = 0x10;
+    static constexpr unsigned char prefix_singlechar = 0x3;
+    static constexpr unsigned char prefix_0x    = 1*4; // 0x4
+    static constexpr unsigned char prefix_0X    = 2*4; // 0x8
+    static constexpr unsigned char prefix_nil   = 3*4; // 0xC
+    static constexpr unsigned char prefix_null  = 4*4; // 0x10
+    static constexpr unsigned char prefix_multichar = ~prefix_singlechar;
 
     struct prn
     {
@@ -77,33 +81,46 @@ namespace myprintf
 
         argument arg;
 
+        char numbuffer[SUPPORT_BINARY_FORMAT ? 64 : 22];
         unsigned char prefix_index = 0;
-        char numbuffer[SUPPORT_BINARY_FORMAT ? 65 : 23];
 
         void flush() NOINLINE
         {
             if(likely(putend != putbegin))
             {
                 unsigned n = putend-putbegin;
+                //std::printf("Flushes %d from <%.*s> to %p\n", n,n,putbegin, param);
                 put(param, putbegin, n);
+                //std::printf("As a result, %p has <%.*s>\n", param, n, param);
                 param += n;
             }
         }
         void append(const char* source, unsigned length) NOINLINE
         {
-            if(source != putend)
+            //std::printf("Append %d from <%.*s>\n", length, length, source);
+            if(likely(length != 0))
             {
-                flush();
-                putbegin = source;
+                if(source != putend)
+                {
+                    flush();
+                    putbegin = source;
+                }
+                putend = source+length;
             }
-            putend = source+length;
         }
-        unsigned format_integer(intfmt_t value, bool uns, char mode)
-        {
-            // Maximum length is ceil(log8(2^64)) + 1 sign character = ceil(64/3+1) = 23 characters
-            static_assert(sizeof(numbuffer) >= (SUPPORT_BINARY_FORMAT ? 65 : 23), "Too small numbuffer");
 
-            if(!uns || unlikely(mode == 'p'))
+        /* sign_mode: 0 = unsigned, 1 = signed, 2 = pointer */
+        unsigned format_integer(intfmt_t value, unsigned char sign_mode)
+        {
+            // Maximum length is ceil(log8(2^64)) = ceil(64/3) = 22 characters
+            static_assert(sizeof(numbuffer) >= (SUPPORT_BINARY_FORMAT ? 64 : 22), "Too small numbuffer");
+
+            if(STRICT_COMPLIANCE && unlikely((sign_mode & 2) && !value)) // (nil) and %p
+            {
+                prefix_index = prefix_nil; // Discards other prefixes
+                return 0;
+            }
+            if(sign_mode != 0) // Pointers and signed values
             {
                 bool negative = value < 0;
                 if(negative)       { value = -value; prefix_index |= prefix_minus; }
@@ -111,6 +128,7 @@ namespace myprintf
                 else if(arg.space) {                 prefix_index |= prefix_space; }
                 // GNU libc printf ignores '+' and ' ' modifiers on unsigned formats,
                 // but curiously, not for %p
+                // Note that '+' overrides ' ' if both are used.
             }
 
             uintfmt_t uvalue = value;
@@ -118,7 +136,7 @@ namespace myprintf
             char     lett = ((arg.base & 64) ? 'A' : 'a')-10;
 
             unsigned width = 0;
-            for(uintfmt_t uvalue_test = uvalue; uvalue_test != 0; )
+            for(uintfmt_t uvalue_test = uvalue; uvalue_test != 0 || (!STRICT_COMPLIANCE && width==0); )
             {
                 ++width;
                 uvalue_test /= base;
@@ -131,11 +149,6 @@ namespace myprintf
                     case 16: prefix_index |= (arg.base & 64) ? prefix_0X : prefix_0x; break; // Add 0x/0X prefix
                 }
             }
-            else if(unlikely(!uvalue && mode=='p'))
-            {
-                prefix_index = prefix_nil; // Discards other prefixes
-                return 0;
-            }
             // For integers, the length limit (.xx) has a different meaning:
             // Minimum number of digits printed.
             if(unlikely(arg.max_width != 65535))
@@ -143,9 +156,9 @@ namespace myprintf
                 if(arg.max_width > width) width = arg.max_width; // width can only grow here.
                 arg.max_width = 65535;
                 // This setting clears out zeropadding according to standard
-                arg.zeropad = false;
+                if(STRICT_COMPLIANCE) { arg.zeropad = false; }
             }
-            else if(width == 0)
+            else if(STRICT_COMPLIANCE && width == 0)
             {
                 // Zero-width is permitted if explicitly specified,
                 // but otherwise we always print at least 1 digit.
@@ -169,32 +182,38 @@ namespace myprintf
             while(number > 0)
             {
                 unsigned n = number;
-                if(n > 8) n = 8;
+                if(n > PatternLength) n = PatternLength;
                 append(from, n);
                 number -= n;
             }
         }
         void format_string(const char* source, unsigned length) NOINLINE
         {
+            if(unlikely(source == nullptr)) { length = 0; prefix_index = prefix_null; }
             /* There are three possible combinations:
              *
-             *    Leftalign Zeropad      Print
-             *           no      no      spacebuffer, prefix, source
-             *          yes     ---      prefix, source, spacebuffer
-             *           no     yes      prefix, spacebuffer, source
+             *    Leftalign      prefix, source, spacebuffer
+             *    Zeropad        prefix, spacebuffer, source
+             *    neither        spacebuffer, prefix, source
+             *
+             * Note that in case of zeropad+leftalign,
+             * zeropad is disregarded according to the standard.
              */
-            char prefixbuffer[6], *prefixend = prefixbuffer; // Max length: "+(nil)" or "(null)" = 6 chars
-            if(unlikely(!source)) { length = 0; prefix_index = prefix_null; }
-            if(prefix_index & 0x3) *prefixend++ = spacebuffer[16 + (prefix_index&0x3)-1];
-            if(prefix_index & 0x1C)
+            char prefixbuffer[6];
+            unsigned prefixlen = 0; // Max length: "+(nil)" or "(null)" = 6 chars
+            if(prefix_index & prefix_singlechar)
             {
-                const char* src = spacebuffer+16+3+spacebuffer[16+3+(prefix_index&0x1C)/4-1];
-                std::memcpy(prefixend, src+1, *src);
-                prefixend += *src;
-                // Disable zero-padding for (nil), (null)
-                if(unlikely(prefix_index >= 0xC)) arg.zeropad = false;
+                prefixbuffer[prefixlen++] = spacebuffer[PatternLength*2 + (prefix_index%4)-1];
             }
-            unsigned prefixlen = prefixend - prefixbuffer;
+            if(prefix_index & prefix_multichar)
+            {
+                unsigned char ctrl = spacebuffer[PatternLength*2+3+prefix_index/4-1];
+                std::memcpy(prefixbuffer+prefixlen, spacebuffer+PatternLength*2+3+(ctrl&0xF), (ctrl>>4));
+                prefixlen += (ctrl>>4);
+                /*std::printf("prefix=%02X ctrl=%02X s=%.3s prefixbuf=<%.*s>\n",
+                    prefix_index,ctrl, spacebuffer+16+3+(ctrl&0xF),
+                    int(prefixlen), prefixbuffer);*/
+            }
 
             // Calculate length of prefix + source
             unsigned combined_length = length + prefixlen;
@@ -203,7 +222,7 @@ namespace myprintf
             {
                 combined_length = arg.max_width;
                 // Figure out how to divide this between prefix and source
-                if(combined_length <= prefixlen)
+                if(unlikely(combined_length <= prefixlen))
                 {
                     // Only room to print some of the prefix, and nothing of the source
                     prefixlen = combined_length;
@@ -226,11 +245,11 @@ namespace myprintf
                 append(source, length);
                 append_spaces(spacebuffer, pad);
             }
-            else if(arg.zeropad)
+            else if(arg.zeropad && (!STRICT_COMPLIANCE || likely(prefix_index < 0xC))) // Disable zero-padding for (nil), (null)
             {
                 // Prefix, then spacebuffer, then source
                 append(prefixbuffer, prefixlen);
-                append_spaces(spacebuffer+8, pad);
+                append_spaces(spacebuffer+PatternLength, pad);
                 append(source, length);
             }
             else
@@ -315,7 +334,10 @@ namespace myprintf
                 }
                 case 'c':
                 {
-                    state.arg.max_width = 65535; // Max-width has no effect on %c formats
+                    if(STRICT_COMPLIANCE)
+                    {
+                        state.arg.max_width = 65535; // Max-width has no effect on %c formats
+                    }
                     state.numbuffer[0] = va_arg(ap, int);
                     state.format_string(state.numbuffer, 1);
                     break;
@@ -342,7 +364,7 @@ namespace myprintf
                     else                                          { value = va_arg(ap, int); }
                     if(uns && state.arg.intsize < sizeof(uintfmt_t)-1) { value &= ((uintfmt_t(1) << (8*(state.arg.intsize+1)))-1); }
 
-                    state.format_string(state.numbuffer, state.format_integer(value, uns, *fmt));
+                    state.format_string(state.numbuffer, state.format_integer(value, *fmt=='p' ? 2 : (uns ? 0 : 1)));
                     break;
                 }
             }
@@ -408,12 +430,18 @@ extern "C" {
         return ret;
     }
 
+    static void mfunc(char* target, const char* src, std::size_t n)
+    {
+        //std::printf("mfunc(%p,%p,%zu)\n", target,src,n);
+        for(std::size_t a=0; a<n; ++a) target[a] = src[a];
+        //std::memcpy(target, src, n);
+    }
+
     int __wrap_vsprintf(char* target, const char* fmt, std::va_list ap) USED_FUNC;
     int __wrap_vsprintf(char* target, const char* fmt, std::va_list ap)
     {
-        typedef void (*afunc_t)(char*,const char*,std::size_t);
-
-        int ret = myprintf::myvprintf(fmt, ap, target, (afunc_t) std::memcpy);
+        int ret = myprintf::myvprintf(fmt, ap, target, mfunc);
+        //std::printf("target = %d = <%.*s>\n", ret, ret, target);
         target[ret] = '\0';
         return ret;
     }
