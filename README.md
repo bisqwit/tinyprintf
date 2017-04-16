@@ -29,7 +29,8 @@ and replace that function with code that is suitable for your project.
   * Format `b` is only enabled if a SUPPORT_BINARY_FORMAT is set
 * The following length modifiers are supported and have the same meaning as in GNU libc printf: none, `h`, `hh`, `l`, `ll`, `L`, `j`, `z`, and `t`
   * The length modifier also affects the pointer type in `n` format
-* Min-width, min-precision, max-width, sign, space, justification modifiers are supported according to the standard
+  * It is possible to explicitly disable most of these modifiers if you don’t need them, and want to reduce binary size further
+* Min-width, min-precision, max-width, sign, space, justification modifiers are supported and fully standards-compliant (C99 / C++11)
 * Re-entrant code (e.g. it is safe to call `sprintf` within your stream I/O function invoked by `printf`)
 * Compatible with GCC’s optimizations where e.g. `printf("abc\n")` is automatically converted into `puts("abc")`
 
