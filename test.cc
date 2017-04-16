@@ -202,6 +202,9 @@ int main()
             test("x", -600000);
             test("X", -600000);
             test("o", -600000);
+            test("x", 0);
+            test("X", 0);
+            test("o", 0);
             if(SUPPORT_H_LENGTHS)
             {
                 test("hd", int(0));

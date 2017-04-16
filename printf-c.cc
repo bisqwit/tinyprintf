@@ -206,12 +206,18 @@ namespace myprintf
             }
 
             unsigned width = estimate_uinteger_width(value, base);
-            if(unlikely(fmt_flags & fmt_alt) && likely(value != 0))
+            if(STRICT_COMPLIANCE && unlikely(fmt_flags & fmt_alt))
             {
                 switch(base)
                 {
-                    case 8: { width += 1; break; } // Add '0' prefix
-                    case 16: { prefix_index += (fmt_flags & fmt_ucbase) ? prefix_0X : prefix_0x; break; } // Add 0x/0X prefix
+                    case 8:
+                        // Make sure there's at least 1 leading '0'
+                        if(value != 0 || precision == 0) { width += 1; }
+                        break;
+                    case 16:
+                        // Add 0x/0X prefix
+                        if(value != 0) { prefix_index += (fmt_flags & fmt_ucbase) ? prefix_0X : prefix_0x; }
+                        break;
                 }
             }
 
