@@ -196,7 +196,7 @@ int main()
             test("llu", (long long)(0));
             test("llu", (long long)(-60000000000000ll));
             test("llu", (long long)(60000000000000ll));
-            if(SUPPORT_H_FORMATS)
+            if(SUPPORT_H_LENGTHS)
             {
                 test("hd", int(0));
                 test("hd", int(20000));

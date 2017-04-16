@@ -4,11 +4,12 @@
 #include <cstdint>
 #include <cmath>
 
-static constexpr bool SUPPORT_BINARY_FORMAT = false;// Whether to support b format type
+static constexpr bool SUPPORT_BINARY_FORMAT = false;// Whether to support %b format type
 static constexpr bool STRICT_COMPLIANCE     = true;
-static constexpr bool SUPPORT_H_FORMATS     = true; // Whether to support h and hh length modifiers
-static constexpr bool SUPPORT_T_FORMAT      = true; // Whether to support t length modifier
-static constexpr bool SUPPORT_J_FORMAT      = true; // Whether to support j length modifier
+static constexpr bool SUPPORT_N_FORMAT      = false;// Whether to support %n format type
+static constexpr bool SUPPORT_H_LENGTHS     = true; // Whether to support h and hh length modifiers
+static constexpr bool SUPPORT_T_LENGTH      = true; // Whether to support t length modifier
+static constexpr bool SUPPORT_J_LENGTH      = true; // Whether to support j length modifier
 static constexpr bool SUPPORT_FLOAT_FORMATS = false; // Floating pointing formats
 static constexpr bool SUPPORT_A_FORMAT      = false; // Floating point hex format
 static constexpr bool SUPPORT_LONG_DOUBLE   = false;
@@ -18,6 +19,7 @@ static constexpr bool SUPPORT_LONG_DOUBLE   = false;
  #define USED_FUNC  __attribute__((used,noinline))
  #pragma GCC push_options
  #pragma GCC optimize ("Ofast")
+ #pragma GCC optimize ("no-ipa-cp-clone")
  #define likely(x)   __builtin_expect(!!(x), 1)
  #define unlikely(x) __builtin_expect(!!(x), 0)
 #else
@@ -26,7 +28,7 @@ static constexpr bool SUPPORT_LONG_DOUBLE   = false;
  #define likely(x)   (x)
  #define unlikely(x) (x)
 #endif
-#if __cplusplus >= 201400
+#if __cplusplus >= 201400 && (!defined(__GNUC__) || __GNUC__ >= 7)
 # define PASSTHRU   [[fallthrough]];
 #else
  #define PASSTHRU
@@ -55,7 +57,7 @@ namespace myprintf
     // - Flags 0x1F are common to all formats.
     // - Flags 0xFE are interpreted in format_integer().
     // - Flags 0x03 are interpreted in format_string().
-    // - Flags 0xE0 are only used in integer formats.
+    // - Flags 0xFE are interpreted in format_float(), but with different meanings.
     static constexpr unsigned char fmt_leftalign = 0x01; // '-'
     static constexpr unsigned char fmt_zeropad   = 0x02; // '0'
     static constexpr unsigned char fmt_plussign  = 0x04; // '+'
@@ -75,13 +77,13 @@ namespace myprintf
         // eight zeros
         '0','0','0','0', '0','0','0','0',
         // table of some multichar prefixes (27 letters)
+        /*'0',*/'x','n','a','n','i','n','f',
+        '0',    'X','N','A','N','I','N','F',
+        '(','n','i','l',')', '(','n','u','l','l',')',
         (0),                            // none
         (2*32+0), (3*32+2),  (3*32+5),  // 0x,nan,inf
         (2*32+8), (3*32+10), (3*32+13), // 0X,NAN,INF
         char(5*32+16), char(6*32+21),
-        '0','x','n','a','n','i','n','f',
-        '0','X','N','A','N','I','N','F',
-        '(','n','i','l',')', '(','n','u','l','l',')',
     };
     static constexpr unsigned char prefix_minus = 1;
     static constexpr unsigned char prefix_plus  = 2;
@@ -130,6 +132,16 @@ namespace myprintf
                 putend = source+length;
             }
         }
+        void append_spaces(const char* from, unsigned count)
+        {
+            while(count > 0)
+            {
+                unsigned n = count;
+                if(n > PatternLength) n = PatternLength;
+                append(from, n);
+                count -= n;
+            }
+        }
 
         /* sign_mode: 0 = unsigned, 1 = signed, 2 = pointer */
         struct widthinfo
@@ -144,7 +156,7 @@ namespace myprintf
             if(value > maxvalue) value = maxvalue;
             return value;
         }
-        static unsigned estimate_uinteger_width(uintfmt_t uvalue, unsigned char base) NOINLINE
+        static unsigned estimate_uinteger_width(uintfmt_t uvalue, unsigned char base) /*NOINLINE*/
         {
             unsigned width=0;
             while(uvalue != 0)
@@ -154,24 +166,14 @@ namespace myprintf
             }
             return width;
         }
-        unsigned put_uinteger(char* target, uintfmt_t uvalue, unsigned min_width, unsigned max_width, unsigned char base) NOINLINE
+        void put_uinteger(char* target, uintfmt_t uvalue, unsigned width, unsigned char base) /*NOINLINE*/
         {
             char lett = ((fmt_flags & fmt_ucbase) ? 'A' : 'a')-10;
-
-            unsigned width = estimate_uinteger_width(uvalue, base);
-            if(unlikely(fmt_flags & fmt_alt) && likely(uvalue != 0) && base == 8)
-            {
-                width += 1; // Add '0' prefix
-            }
-
-            // Range check
-            width = clamp(width, min_width, max_width);
             for(unsigned w=width; w-- > 0; )
             {
                 unsigned digitvalue = uvalue % base; uvalue /= base;
                 target[w] = digitvalue + (digitvalue < 10 ? '0' : lett);
             }
-            return width;
         }
 
         widthinfo format_integer(intfmt_t value, unsigned char base, unsigned precision)
@@ -188,7 +190,7 @@ namespace myprintf
             if(fmt_flags & fmt_signed) // Pointers and signed values
             {
                 bool negative = value < 0;
-                if(negative)   { value = -value; prefix_index = prefix_minus; }
+                if(negative)      { value = -value; prefix_index = prefix_minus; }
                 else if(fmt_flags & fmt_plussign) { prefix_index = prefix_plus;  }
                 else if(fmt_flags & fmt_space)    { prefix_index = prefix_space; }
                 // GNU libc printf ignores '+' and ' ' modifiers on unsigned formats, but curiously, not for %p.
@@ -202,12 +204,20 @@ namespace myprintf
                 // This setting clears out zeropadding according to standard
                 if(STRICT_COMPLIANCE) { fmt_flags &= ~fmt_zeropad; }
             }
-            if(unlikely(fmt_flags & fmt_alt) && value != 0 && base == 16)
+
+            unsigned width = estimate_uinteger_width(value, base);
+            if(unlikely(fmt_flags & fmt_alt) && likely(value != 0))
             {
-                prefix_index += (fmt_flags & fmt_ucbase) ? prefix_0X : prefix_0x; // Add 0x/0X prefix
+                switch(base)
+                {
+                    case 8: { width += 1; break; } // Add '0' prefix
+                    case 16: { prefix_index += (fmt_flags & fmt_ucbase) ? prefix_0X : prefix_0x; break; } // Add 0x/0X prefix
+                }
             }
 
-            unsigned width = put_uinteger(numbuffer, value, min_width, sizeof(numbuffer), base);
+            // Range check
+            width = clamp(width, min_width, sizeof(numbuffer));
+            put_uinteger(numbuffer, value, width, base);
             return {width, prefix_index};
         }
 
@@ -216,7 +226,7 @@ namespace myprintf
         {
             unsigned char prefix_index = 0;
             bool negative = value < 0;
-            if(negative)   { value = -value; prefix_index = prefix_minus; }
+            if(negative)      { value = -value; prefix_index = prefix_minus; }
             else if(fmt_flags & fmt_plussign) { prefix_index = prefix_plus;  }
             else if(fmt_flags & fmt_space)    { prefix_index = prefix_space; }
 
@@ -322,56 +332,45 @@ namespace myprintf
             {
             }
 
-            unsigned tgt = put_uinteger(numbuffer + 0, head, head_width, head_width, 10);
+            put_uinteger(numbuffer + 0, head, head_width, 10);
+            unsigned tgt = head_width;
             if(point_width)
             {
                 numbuffer[tgt] = '.'; tgt += 1;
-                tgt += put_uinteger(numbuffer + tgt, fraction, decimals_width, decimals_width, 10);
+                put_uinteger(numbuffer + tgt, fraction, decimals_width, 10);
+                tgt += decimals_width;
             }
             if(exponent_width)
             {
                 numbuffer[tgt++] = ((fmt_flags & fmt_ucbase) ? 'E' : 'e');
                 numbuffer[tgt++] = ((e_exponent < 0)         ? '-' : '+');
-                tgt += put_uinteger(numbuffer + tgt, e_exponent<0 ? -e_exponent : e_exponent,
-                                    exponent_width-2, exponent_width-2, 10);
+                put_uinteger(numbuffer + tgt, e_exponent<0 ? -e_exponent : e_exponent, exponent_width-2, 10);
+                tgt += exponent_width-2;
             }
             return {tgt, prefix_index};
         }
 
-        void append_spaces(const char* from, unsigned count)
-        {
-            while(count > 0)
-            {
-                unsigned n = count;
-                if(n > PatternLength) n = PatternLength;
-                append(from, n);
-                count -= n;
-            }
-        }
         void format_string(const char* source, unsigned min_width, unsigned max_width, widthinfo info)
         {
             if(unlikely(source == nullptr)) { /* info.length = 0; */ info.prefix_index = prefix_null; }
             /* There are three possible combinations:
              *
              *    Leftalign      prefix, source, spaces
-             *    Zeropad        prefix, spaces, source
+             *    Zeropad        prefix, zeros,  source
              *    neither        spaces, prefix, source
              *
              * Note that in case of zeropad+leftalign,
              * zeropad is disregarded according to the standard.
              */
             char prefixbuffer[4]; // Longest: +inf
-            unsigned char ctrl = stringconstants[2+PatternLength*2 + info.prefix_index/4], prefixlen = ctrl/32;
-            const char* prefixsource = &stringconstants[2+PatternLength*2+9 + (ctrl%32)];
-            const char* prefix = prefixbuffer;
+            unsigned char ctrl = stringconstants[2+PatternLength*2 + 26 + info.prefix_index/4], prefixlen = ctrl/32;
+            const char* prefixsource = &stringconstants[2+PatternLength*2-1 + (ctrl%32)];
+            const char* prefix = prefixsource;
             if(info.prefix_index & 3)
             {
                 prefixbuffer[0] = stringconstants[(info.prefix_index&3)-1];
                 std::memcpy(prefixbuffer+1, prefixsource, prefixlen++);
-            }
-            else
-            {
-                prefix = prefixsource;
+                prefix = prefixbuffer;
             }
 
             // Calculate length of prefix + source
@@ -410,15 +409,16 @@ namespace myprintf
         }
     };
 
-    static void read_int(const char*& fmt, unsigned& value) NOINLINE;
-    static void read_int(const char*& fmt, unsigned& value)
+    static unsigned read_int(const char*& fmt, unsigned def) NOINLINE;
+    static unsigned read_int(const char*& fmt, unsigned def)
     {
         if(*fmt >= '0' && *fmt <= '9')
         {
             unsigned v = 0;
             do { v = v*10 + (*fmt++ - '0'); } while(*fmt >= '0' && *fmt <= '9');
-            value = v;
+            return v;
         }
+        return def;
     }
 
     int myvprintf(const char* fmt, std::va_list ap, char* param, void (*put)(char*,const char*,std::size_t)) NOINLINE;
@@ -461,7 +461,7 @@ namespace myprintf
             }
             else
             {
-                read_int(fmt, min_width);
+                min_width = read_int(fmt, min_width);
             }
 
             unsigned precision = ~0u;
@@ -475,7 +475,7 @@ namespace myprintf
                 }
                 else
                 {
-                    read_int(fmt, precision);
+                    precision = read_int(fmt, precision);
                 }
             }
 
@@ -483,14 +483,14 @@ namespace myprintf
             unsigned char base    = base_decimal;
             switch(*fmt)
             {
-                case 't': if(!SUPPORT_T_FORMAT) break;
+                case 't': if(!SUPPORT_T_LENGTH) break;
                           intsize = sizeof(std::ptrdiff_t); ++fmt; break;
                 case 'z': intsize = sizeof(std::size_t);    ++fmt; break;
                 case 'l': intsize = sizeof(long);       if(*++fmt != 'l') break; PASSTHRU
                 case 'L': intsize = sizeof(long long);      ++fmt; break; // Or 'long double'
-                case 'j': if(!SUPPORT_J_FORMAT) break;
+                case 'j': if(!SUPPORT_J_LENGTH) break;
                           intsize = sizeof(std::intmax_t);  ++fmt; break;
-                case 'h': if(!SUPPORT_H_FORMATS) break;
+                case 'h': if(!SUPPORT_H_LENGTHS) break;
                           intsize = sizeof(short);      if(*++fmt != 'h') break; /*PASSTHRU*/
                           intsize = sizeof(char);           ++fmt; break;
             }
@@ -504,19 +504,23 @@ namespace myprintf
                 case '\0': goto unexpected;
                 case 'n':
                 {
+                    if(!SUPPORT_N_FORMAT) goto got_int;
                     auto value = state.param - param;
                     void* pointer = GET_ARG(void*);
-                    if(sizeof(long) != sizeof(long long)
-                    && intsize == sizeof(long long))  { *static_cast<long long*>(pointer) = value; }
-                    else if(sizeof(int) != sizeof(long)
-                         && intsize == sizeof(long))  { *static_cast<long*>(pointer) = value; }
-                    else if(SUPPORT_H_FORMATS
-                         && sizeof(int) != sizeof(short)
-                         && intsize == sizeof(short)) { *static_cast<short*>(pointer) = value; }
-                    else if(SUPPORT_H_FORMATS
-                         && sizeof(int) != sizeof(char)
-                         && intsize == sizeof(char))  { *static_cast<signed char*>(pointer) = value; }
-                    else                              { *static_cast<int*>(pointer) = value; }
+                    if(unlikely(intsize != sizeof(int)))
+                    {
+                        if(sizeof(long) != sizeof(long long)
+                        && intsize == sizeof(long long))  { *static_cast<long long*>(pointer) = value; }
+                        else if(sizeof(int) != sizeof(long)
+                             && intsize == sizeof(long))  { *static_cast<long*>(pointer) = value; }
+                        else if(SUPPORT_H_LENGTHS
+                             && sizeof(int) != sizeof(short)
+                             && intsize == sizeof(short)) { *static_cast<short*>(pointer) = value; }
+                        else /*if(SUPPORT_H_LENGTHS
+                             && sizeof(int) != sizeof(char)
+                             && intsize == sizeof(char))*/{ *static_cast<signed char*>(pointer) = value; }
+                    }
+                    else                                  { *static_cast<int*>(pointer) = value; }
                     continue; // Nothing to format
                 }
                 case 's':
@@ -558,10 +562,10 @@ namespace myprintf
                     else
                     {
                         value = GET_ARG(int);
-                        if(SUPPORT_H_FORMATS)
+                        if(SUPPORT_H_LENGTHS && intsize != sizeof(int))
                         {
                             if(sizeof(int) != sizeof(short) && intsize == sizeof(short)) { value = (signed short)value; }
-                            else if(sizeof(int) != sizeof(char) && intsize == sizeof(char)) { value = (signed char)value; }
+                            else /*if(sizeof(int) != sizeof(char) && intsize == sizeof(char))*/ { value = (signed char)value; }
                         }
                     }
                     if(!(state.fmt_flags & fmt_signed) && intsize < sizeof(uintfmt_t))
