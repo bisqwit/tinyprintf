@@ -34,6 +34,7 @@ and replace that function with code that is suitable for your project.
 * Re-entrant code (e.g. it is safe to call `sprintf` within your stream I/O function invoked by `printf`)
 * Compatible with GCC’s optimizations where e.g. `printf("abc\n")` is automatically converted into `puts("abc")`
 * Positional parameters are fully supported (e.g. `printf("%2$s %1$d\n", 5, "test");`), disabled by default
+  * If positional parameters are enabled, dynamically allocated arrays are used to hold parameter information temporarily
 
 ## Caveats
 
@@ -47,7 +48,8 @@ and replace that function with code that is suitable for your project.
 * Padding/cutting widths are limited to 4294967294 characters
   * The minimum integer digits format modifier (such as %.10d) is limited to 22 digits (or 64 if SUPPORT_BINARY_FORMAT=true)
 * Behavior differs to GNU libc printf when a nul pointer is printed with `p` or `s` formats and max-width specifier is used
-  
+* If positional parameters are enabled, there may be a maximum of 32767 parameters to printf.
+
 ## Unsupported syntax
 
 Note that any of the following traits may change in future releases.

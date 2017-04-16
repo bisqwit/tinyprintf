@@ -3,6 +3,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <type_traits>
+#include <algorithm>
 #include <cmath>
 
 static constexpr bool SUPPORT_BINARY_FORMAT = false;// Whether to support %b format type
@@ -473,6 +474,11 @@ namespace myprintf
         return 0;
     }
 
+    /* Note: Compilation of this function depends on the compiler's ability to optimize away
+     * code that is never reached because of the state of the constexpr bools.
+     * E.g. if SUPPORT_POSITIONAL_PARAMETERS = false, much of the code in this function
+     * will end up dummied out and the binary size will be smaller.
+     */
     int myvprintf(const char* fmt, std::va_list ap, char* param, void (*put)(char*,const char*,std::size_t)) NOINLINE;
     int myvprintf(const char* fmt_begin, std::va_list ap, char* param, void (*put)(char*,const char*,std::size_t))
     {
@@ -497,48 +503,64 @@ namespace myprintf
          * Pass 0: Actually print (no pos. params)
          */
         //printf("---Interpret %s\n", fmt_begin);
-        for(unsigned char round = SUPPORT_POSITIONAL_PARAMETERS ? 4 : 1; round-- > 0; )
+
+        constexpr unsigned MAX_AUTO_PARAMS = 0x8000, MAX_ROUNDS = 4, POS_PARAM_MUL = MAX_AUTO_PARAMS * MAX_ROUNDS;
+
+        // "Round" variable encodes, starting from lsb:
+        //     - log2(MAX_AUTO_PARAMS) bits: number of auto params counted so far
+        //     - 2 bits:                     round number
+        //     - The rest:                   maximum explicit param index found so far
+        for(unsigned round = SUPPORT_POSITIONAL_PARAMETERS ? (3*MAX_AUTO_PARAMS) : 0; ; )
         {
-            unsigned max_explicit_param_index = 0, max_auto_param_index = 0;
-            auto process_param = [&](unsigned typecode, unsigned which_param_index, auto type)
+            auto process_param = [&round,param_offset_table,param_data_table]
+                                    (unsigned typecode, unsigned which_param_index, auto type)
             {
-                //printf("Round %u, paramindex=%u", round, which_param_index); fflush(stdout);
                 if(which_param_index == 0)
-                    which_param_index = ++max_auto_param_index;
+                {
+                    which_param_index = round++ % MAX_AUTO_PARAMS;
+                }
                 else
                 {
-                    if(which_param_index > max_explicit_param_index)
-                        max_explicit_param_index = which_param_index;
+                    if(which_param_index > round / POS_PARAM_MUL)
+                        round = round % POS_PARAM_MUL + which_param_index * POS_PARAM_MUL;
+                    --which_param_index;
                 }
-                //printf(" interpreted as %u\n", which_param_index); fflush(stdout);
-                switch(round)
+                switch((round / MAX_AUTO_PARAMS) % MAX_ROUNDS)
                 {
                     case 2:
-                        param_offset_table[which_param_index-1] = typecode;
+                        param_offset_table[which_param_index] = typecode;
                         break;
                     case 1:
-                        //printf("Reading %zu bytes from offset %u\n", sizeof(type), param_offset_table[which_param_index-1]); fflush(stdout);
-                        auto result = *(std::remove_reference_t<decltype(type)> const*)
-                                  &param_data_table[param_offset_table[which_param_index-1]];
-                        //printf("Value: %llX\n", (long long)result); fflush(stdout);
-                        return result;
+                        return *(std::remove_reference_t<decltype(type)> const*)
+                                  &param_data_table[param_offset_table[which_param_index]];
                 }
                 return type;
             };
 
+            // Rounds 0 and 1 are action rounds. Rounds 2 and 3 are not (nothing is printed).
+            const bool action_round = !SUPPORT_POSITIONAL_PARAMETERS || !(round & (MAX_AUTO_PARAMS*2));
+
+            // Start parsing the format string from beginning
             const char* fmt = fmt_begin;
             for(; likely(*fmt != '\0'); ++fmt)
             {
                 if(likely(*fmt != '%'))
                 {
                 literal:
-                    if(SUPPORT_POSITIONAL_PARAMETERS && round>1) continue;
-                    state.append(fmt, 1);
+                    if(action_round) state.append(fmt, 1);
                     continue;
                 }
                 if(unlikely(*++fmt == '%')) { goto literal; }
 
+                #define GET_ARG(acquire_type, variable, type_index, which_param_index) \
+                    acquire_type variable = (SUPPORT_POSITIONAL_PARAMETERS && round != 0) \
+                        ? process_param((sizeof(acquire_type)*8 + type_index), which_param_index, decltype(variable){}) \
+                        : (/*std::printf("va_arg(%s)\n", #acquire_type),*/ va_arg(ap, acquire_type))
+
+                // Read possible position-index for the value
                 unsigned param_index = SUPPORT_POSITIONAL_PARAMETERS ? read_param_index(fmt) : 0;
+
+                // Read format flags
                 unsigned char fmt_flags = 0;
             moreflags:;
                 switch(*fmt)
@@ -550,11 +572,7 @@ namespace myprintf
                     case '0': fmt_flags |= fmt_zeropad;   goto moreflags1;
                 }
 
-                #define GET_ARG(acquire_type, variable, type_index, which_param_index) \
-                    acquire_type variable = (SUPPORT_POSITIONAL_PARAMETERS && round != 0) \
-                        ? process_param((sizeof(acquire_type)*8 + type_index), which_param_index, decltype(variable){}) \
-                        : (/*std::printf("va_arg(%s)\n", #acquire_type),*/ va_arg(ap, acquire_type))
-
+                // Read possible min-width
                 unsigned min_width = 0;
                 if(*fmt == '*')
                 {
@@ -571,6 +589,7 @@ namespace myprintf
                     min_width = read_int(fmt, min_width);
                 }
 
+                // Read possible precision / max-width
                 unsigned precision = ~0u;
                 if(*fmt == '.')
                 {
@@ -589,6 +608,7 @@ namespace myprintf
                     }
                 }
 
+                // Read possible length modifier
                 unsigned char intsize = sizeof(int);
                 unsigned char base    = base_decimal;
                 switch(*fmt)
@@ -606,18 +626,19 @@ namespace myprintf
                 }
                 state.fmt_flags = fmt_flags;
 
+                // Read the format type
                 char* source = state.numbuffer;
                 prn::widthinfo info{0,0};
-
                 switch(*fmt)
                 {
                     case '\0': goto unexpected;
                     case 'n':
                     {
                         if(!SUPPORT_N_FORMAT) goto got_int;
-                        auto value = state.param - param;
                         GET_ARG(void*,pointer,3, param_index);
-                        if(SUPPORT_POSITIONAL_PARAMETERS && round>1) continue;
+                        if(!action_round) continue;
+
+                        auto value = state.param - param;
                         if(unlikely(intsize != sizeof(int)))
                         {
                             if(sizeof(long) != sizeof(long long)
@@ -637,8 +658,9 @@ namespace myprintf
                     case 's':
                     {
                         GET_ARG(void*,pointer,3, param_index);
+                        if(!action_round) continue;
+
                         source = static_cast<char*>(pointer);
-                        if(SUPPORT_POSITIONAL_PARAMETERS && round>1) continue;
                         if(source)
                         {
                             info.length = std::strlen(source);
@@ -650,8 +672,9 @@ namespace myprintf
                     case 'c':
                     {
                         GET_ARG(int,c,0, param_index);
+
                         source[0] = static_cast<char>(c);
-                        if(SUPPORT_POSITIONAL_PARAMETERS && round>1) continue;
+                        if(!action_round) continue;
                         info.length = 1;
                         if(STRICT_COMPLIANCE)
                         {
@@ -676,14 +699,15 @@ namespace myprintf
                              && intsize == sizeof(long))  { GET_ARG(long,v,1, param_index); value = v; }
                         else
                         {
-                            GET_ARG(int,v,0, param_index); value = v;
+                            GET_ARG(int,v,0, param_index);
+                            value = v;
                             if(SUPPORT_H_LENGTHS && intsize != sizeof(int))
                             {
                                 if(sizeof(int) != sizeof(short) && intsize == sizeof(short)) { value = (signed short)value; }
                                 else /*if(sizeof(int) != sizeof(char) && intsize == sizeof(char))*/ { value = (signed char)value; }
                             }
                         }
-                        if(SUPPORT_POSITIONAL_PARAMETERS && round>1) continue;
+                        if(!action_round) continue;
                         if(!(state.fmt_flags & fmt_signed) && intsize < sizeof(uintfmt_t))
                         {
                             value &= ((uintfmt_t(1) << (8*intsize))-1);
@@ -715,13 +739,13 @@ namespace myprintf
                         if(SUPPORT_LONG_DOUBLE && intsize == sizeof(long long))
                         {
                             GET_ARG(long double,value,5, param_index);
-                            if(SUPPORT_POSITIONAL_PARAMETERS && round>1) continue;
+                            if(!action_round) continue;
                             info = state.format_float(value, base, precision);
                         }
                         else
                         {
                             GET_ARG(double,value,4, param_index);
-                            if(SUPPORT_POSITIONAL_PARAMETERS && round>1) continue;
+                            if(!action_round) continue;
                             info = state.format_float(value, base, precision);
                         }
                         precision = ~0u; // No max-width
@@ -746,17 +770,20 @@ namespace myprintf
                 #undef GET_ARG
             }
         unexpected:;
+            // Format string processing is complete.
             if(!SUPPORT_POSITIONAL_PARAMETERS) break;
-            unsigned n_params = max_explicit_param_index;
-            if(max_auto_param_index > n_params) n_params = max_auto_param_index;
-            switch(round)
+
+            // Do book-keeping after each round. See notes in the beginning of this function.
+            unsigned n_params = std::max(round % MAX_AUTO_PARAMS, round / POS_PARAM_MUL);
+            unsigned rndno = (round / MAX_AUTO_PARAMS) % MAX_ROUNDS;
+            switch(rndno)
             {
                 case 3:
                 {
-                    if(!max_explicit_param_index)
+                    if(round < MAX_AUTO_PARAMS*MAX_ROUNDS)
                     {
                         // No positional parameters, jump to round 0
-                        round = 1;
+                        round = 0;
                         continue;
                     }
                     //printf("Allocated %u params\n", n_params);
@@ -799,9 +826,11 @@ namespace myprintf
                 {
                     delete[] param_data_table;
                     delete[] param_offset_table;
+                default:
                     goto exit_rounds;
                 }
             }
+            round = (rndno-1) * MAX_AUTO_PARAMS;
         }
     exit_rounds:;
         state.flush();
