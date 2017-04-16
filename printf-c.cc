@@ -2,6 +2,7 @@
 #include <cstring>
 #include <cstdarg>
 #include <cstdint>
+#include <type_traits>
 #include <cmath>
 
 static constexpr bool SUPPORT_BINARY_FORMAT = false;// Whether to support %b format type
@@ -13,13 +14,16 @@ static constexpr bool SUPPORT_J_LENGTH      = true; // Whether to support j leng
 static constexpr bool SUPPORT_FLOAT_FORMATS = false; // Floating pointing formats
 static constexpr bool SUPPORT_A_FORMAT      = false; // Floating point hex format
 static constexpr bool SUPPORT_LONG_DOUBLE   = false;
+static constexpr bool SUPPORT_POSITIONAL_PARAMETERS = false;
 
 #ifdef __GNUC__
  #define NOINLINE   __attribute__((noinline))
  #define USED_FUNC  __attribute__((used,noinline))
  #pragma GCC push_options
  #pragma GCC optimize ("Ofast")
- #pragma GCC optimize ("no-ipa-cp-clone")
+ //#pragma GCC optimize ("no-ipa-cp-clone")
+ //#pragma GCC optimize ("conserve-stack")
+ //#pragma GCC optimize ("no-defer-pop")
  #define likely(x)   __builtin_expect(!!(x), 1)
  #define unlikely(x) __builtin_expect(!!(x), 0)
 #else
@@ -74,7 +78,7 @@ namespace myprintf
     template<bool SupportFloats> struct GetStringConstants{};
     template<> struct GetStringConstants<false>
     {
-        static inline const char* GetTable()
+        static const char* GetTable() NOINLINE
         {
             static const char stringconstants_intonly[] {
                 '-','+',/*' ',*/
@@ -93,7 +97,7 @@ namespace myprintf
     };
     template<> struct GetStringConstants<true>
     {
-        static inline const char* GetTable()
+        static const char* GetTable() NOINLINE
         {
             static const char stringconstants_floats[] {
                 '-','+',/*' ',*/
@@ -123,7 +127,7 @@ namespace myprintf
     static constexpr unsigned char prefix_inf   = 4*6;
     static constexpr unsigned char prefix_NAN   = 4*7;
     static constexpr unsigned char prefix_INF   = 4*8;
-    static constexpr unsigned char prefix_data_length = SUPPORT_FLOAT_FORMATS ? (8+8+5+6) : (4+5+6);
+    static constexpr unsigned char prefix_data_length = SUPPORT_FLOAT_FORMATS ? (8+8+5+6) : (2+2+5+6);
 
     struct prn
     {
@@ -186,7 +190,7 @@ namespace myprintf
         }
         static unsigned estimate_uinteger_width(uintfmt_t uvalue, unsigned char base) /*NOINLINE*/
         {
-            unsigned width=0;
+            unsigned width = 0;
             while(uvalue != 0)
             {
                 ++width;
@@ -194,14 +198,18 @@ namespace myprintf
             }
             return width;
         }
-        void put_uinteger(char* target, uintfmt_t uvalue, unsigned width, unsigned char base) /*NOINLINE*/
+
+        static void put_uinteger(char* target, uintfmt_t uvalue, unsigned width, unsigned char base, char alphaoffset) /*NOINLINE*/
         {
-            char lett = ((fmt_flags & fmt_ucbase) ? 'A' : 'a')-10;
             for(unsigned w=width; w-- > 0; )
             {
                 unsigned digitvalue = uvalue % base; uvalue /= base;
-                target[w] = digitvalue + (digitvalue < 10 ? '0' : lett);
+                target[w] = digitvalue + (likely(digitvalue < 10) ? '0' : alphaoffset);
             }
+        }
+        static void put_uint_decimal(char* target, uintfmt_t uvalue, unsigned width) NOINLINE
+        {
+            put_uinteger(target, uvalue, width, 10, '0');
         }
 
         widthinfo format_integer(intfmt_t value, unsigned char base, unsigned precision)
@@ -251,7 +259,7 @@ namespace myprintf
 
             // Range check
             width = clamp(width, min_width, sizeof(numbuffer));
-            put_uinteger(numbuffer, value, width, base);
+            put_uinteger(numbuffer, value, width, base, ((fmt_flags & fmt_ucbase) ? 'A' : 'a')-10);
             return {width, prefix_index};
         }
 
@@ -266,7 +274,7 @@ namespace myprintf
 
             if(!std::isfinite(value))
             {
-                return {0, (unsigned char)(prefix_index | (
+                return {0, (unsigned char)(prefix_index + (
                                     std::isinf(value) ? ((fmt_flags & fmt_ucbase) ? prefix_INF : prefix_inf)
                                                       : ((fmt_flags & fmt_ucbase) ? prefix_NAN : prefix_nan)))};
             }
@@ -366,19 +374,19 @@ namespace myprintf
             {
             }
 
-            put_uinteger(numbuffer + 0, head, head_width, 10);
+            put_uint_decimal(numbuffer + 0, head, head_width);
             unsigned tgt = head_width;
             if(point_width)
             {
                 numbuffer[tgt] = '.'; tgt += 1;
-                put_uinteger(numbuffer + tgt, fraction, decimals_width, 10);
+                put_uint_decimal(numbuffer + tgt, fraction, decimals_width);
                 tgt += decimals_width;
             }
             if(exponent_width)
             {
                 numbuffer[tgt++] = ((fmt_flags & fmt_ucbase) ? 'E' : 'e');
                 numbuffer[tgt++] = ((e_exponent < 0)         ? '-' : '+');
-                put_uinteger(numbuffer + tgt, e_exponent<0 ? -e_exponent : e_exponent, exponent_width-2, 10);
+                put_uint_decimal(numbuffer + tgt, e_exponent<0 ? -e_exponent : e_exponent, exponent_width-2);
                 tgt += exponent_width-2;
             }
             return {tgt, prefix_index};
@@ -396,7 +404,7 @@ namespace myprintf
              * Note that in case of zeropad+leftalign,
              * zeropad is disregarded according to the standard.
              */
-            char prefixbuffer[4]; // Longest: +inf
+            char prefixbuffer[SUPPORT_FLOAT_FORMATS ? 4 : 3]; // Longest: +inf
             const char* stringconstants = GetStringConstants<SUPPORT_FLOAT_FORMATS>::GetTable();
             unsigned char ctrl = stringconstants[2+PatternLength*2 + prefix_data_length-1 + info.prefix_index/4], prefixlen = ctrl/32;
             const char* prefixsource = &stringconstants[2+PatternLength*2-1 + (ctrl%32)];
@@ -455,214 +463,347 @@ namespace myprintf
         }
         return def;
     }
+    static unsigned read_param_index(const char*& fmt) NOINLINE;
+    static unsigned read_param_index(const char*& fmt)
+    {
+        const char* bkup = fmt;
+        unsigned index = read_int(fmt, 0);
+        if(*fmt == '$') { ++fmt; return index; }
+        fmt = bkup;
+        return 0;
+    }
 
     int myvprintf(const char* fmt, std::va_list ap, char* param, void (*put)(char*,const char*,std::size_t)) NOINLINE;
-    int myvprintf(const char* fmt, std::va_list ap, char* param, void (*put)(char*,const char*,std::size_t))
+    int myvprintf(const char* fmt_begin, std::va_list ap, char* param, void (*put)(char*,const char*,std::size_t))
     {
         prn state;
         state.param = param;
         state.put   = put;
 
-        for(; likely(*fmt != '\0'); ++fmt)
+        unsigned*    param_offset_table = nullptr;
+        unsigned char* param_data_table = nullptr;
+
+        /* Positional parameters support:
+         * Pass 3: Calculate the number of parameters,
+                   then allocate array of sizes
+                   Or, if no positional parameters were found,
+                   jump straight to step 0
+         * Pass 2: Populate the array of sizes,
+         *         then convert it into array of offsets,
+         *         and allocate array of data,
+         *         and populate array of data
+         * Pass 1: Actually print,
+         *         then free the two arrays, and exit
+         * Pass 0: Actually print (no pos. params)
+         */
+        //printf("---Interpret %s\n", fmt_begin);
+        for(unsigned char round = SUPPORT_POSITIONAL_PARAMETERS ? 4 : 1; round-- > 0; )
         {
-            if(likely(*fmt != '%'))
+            unsigned max_explicit_param_index = 0, max_auto_param_index = 0;
+            auto process_param = [&](unsigned typecode, unsigned which_param_index, auto type)
             {
-            literal:
-                state.append(fmt, 1);
-                continue;
-            }
-            if(unlikely(*++fmt == '%')) { goto literal; }
+                //printf("Round %u, paramindex=%u", round, which_param_index); fflush(stdout);
+                if(which_param_index == 0)
+                    which_param_index = ++max_auto_param_index;
+                else
+                {
+                    if(which_param_index > max_explicit_param_index)
+                        max_explicit_param_index = which_param_index;
+                }
+                //printf(" interpreted as %u\n", which_param_index); fflush(stdout);
+                switch(round)
+                {
+                    case 2:
+                        param_offset_table[which_param_index-1] = typecode;
+                        break;
+                    case 1:
+                        //printf("Reading %zu bytes from offset %u\n", sizeof(type), param_offset_table[which_param_index-1]); fflush(stdout);
+                        auto result = *(std::remove_reference_t<decltype(type)> const*)
+                                  &param_data_table[param_offset_table[which_param_index-1]];
+                        //printf("Value: %llX\n", (long long)result); fflush(stdout);
+                        return result;
+                }
+                return type;
+            };
 
-            unsigned char fmt_flags = 0;
-        moreflags:;
-            switch(*fmt)
+            const char* fmt = fmt_begin;
+            for(; likely(*fmt != '\0'); ++fmt)
             {
-                case '-': fmt_flags |= fmt_leftalign; moreflags1: ++fmt; goto moreflags;
-                case ' ': fmt_flags |= fmt_space;     goto moreflags1;
-                case '+': fmt_flags |= fmt_plussign;  goto moreflags1;
-                case '#': fmt_flags |= fmt_alt;       goto moreflags1;
-                case '0': fmt_flags |= fmt_zeropad;   goto moreflags1;
-            }
+                if(likely(*fmt != '%'))
+                {
+                literal:
+                    if(SUPPORT_POSITIONAL_PARAMETERS && round>1) continue;
+                    state.append(fmt, 1);
+                    continue;
+                }
+                if(unlikely(*++fmt == '%')) { goto literal; }
 
-            #define GET_ARG(acquire_type) va_arg(ap, acquire_type)
+                unsigned param_index = SUPPORT_POSITIONAL_PARAMETERS ? read_param_index(fmt) : 0;
+                unsigned char fmt_flags = 0;
+            moreflags:;
+                switch(*fmt)
+                {
+                    case '-': fmt_flags |= fmt_leftalign; moreflags1: ++fmt; goto moreflags;
+                    case ' ': fmt_flags |= fmt_space;     goto moreflags1;
+                    case '+': fmt_flags |= fmt_plussign;  goto moreflags1;
+                    case '#': fmt_flags |= fmt_alt;       goto moreflags1;
+                    case '0': fmt_flags |= fmt_zeropad;   goto moreflags1;
+                }
 
-            unsigned min_width = 0;
-            if(*fmt == '*')
-            {
-                ++fmt;
-                int v = GET_ARG(int);
-                min_width = (v < 0) ? -v : v;
-                if(v < 0) { fmt_flags |= fmt_leftalign; } // negative value sets left-aligning
-            }
-            else
-            {
-                min_width = read_int(fmt, min_width);
-            }
+                #define GET_ARG(acquire_type, variable, type_index, which_param_index) \
+                    acquire_type variable = (SUPPORT_POSITIONAL_PARAMETERS && round != 0) \
+                        ? process_param((sizeof(acquire_type)*8 + type_index), which_param_index, decltype(variable){}) \
+                        : (/*std::printf("va_arg(%s)\n", #acquire_type),*/ va_arg(ap, acquire_type))
 
-            unsigned precision = ~0u;
-            if(*fmt == '.')
-            {
-                if(*++fmt == '*')
+                unsigned min_width = 0;
+                if(*fmt == '*')
                 {
                     ++fmt;
-                    int v = GET_ARG(int);
-                    if(v >= 0) { precision = v; } // negative value is treated as unset
+
+                    unsigned opt_index = SUPPORT_POSITIONAL_PARAMETERS ? read_param_index(fmt) : 0;
+                    GET_ARG(int,v,0, opt_index);
+
+                    min_width = (v < 0) ? -v : v;
+                    if(v < 0) { fmt_flags |= fmt_leftalign; } // negative value sets left-aligning
                 }
                 else
                 {
-                    precision = read_int(fmt, precision);
+                    min_width = read_int(fmt, min_width);
                 }
-            }
 
-            unsigned char intsize = sizeof(int);
-            unsigned char base    = base_decimal;
-            switch(*fmt)
-            {
-                case 't': if(!SUPPORT_T_LENGTH) break;
-                          intsize = sizeof(std::ptrdiff_t); ++fmt; break;
-                case 'z': intsize = sizeof(std::size_t);    ++fmt; break;
-                case 'l': intsize = sizeof(long);       if(*++fmt != 'l') break; PASSTHRU
-                case 'L': intsize = sizeof(long long);      ++fmt; break; // Or 'long double'
-                case 'j': if(!SUPPORT_J_LENGTH) break;
-                          intsize = sizeof(std::intmax_t);  ++fmt; break;
-                case 'h': if(!SUPPORT_H_LENGTHS) break;
-                          intsize = sizeof(short);      if(*++fmt != 'h') break; /*PASSTHRU*/
-                          intsize = sizeof(char);           ++fmt; break;
-            }
-            state.fmt_flags = fmt_flags;
-
-            char* source = state.numbuffer;
-            prn::widthinfo info{0,0};
-
-            switch(*fmt)
-            {
-                case '\0': goto unexpected;
-                case 'n':
+                unsigned precision = ~0u;
+                if(*fmt == '.')
                 {
-                    if(!SUPPORT_N_FORMAT) goto got_int;
-                    auto value = state.param - param;
-                    void* pointer = GET_ARG(void*);
-                    if(unlikely(intsize != sizeof(int)))
+                    if(*++fmt == '*')
                     {
-                        if(sizeof(long) != sizeof(long long)
-                        && intsize == sizeof(long long))  { *static_cast<long long*>(pointer) = value; }
-                        else if(sizeof(int) != sizeof(long)
-                             && intsize == sizeof(long))  { *static_cast<long*>(pointer) = value; }
-                        else if(SUPPORT_H_LENGTHS
-                             && sizeof(int) != sizeof(short)
-                             && intsize == sizeof(short)) { *static_cast<short*>(pointer) = value; }
-                        else /*if(SUPPORT_H_LENGTHS
-                             && sizeof(int) != sizeof(char)
-                             && intsize == sizeof(char))*/{ *static_cast<signed char*>(pointer) = value; }
-                    }
-                    else                                  { *static_cast<int*>(pointer) = value; }
-                    continue; // Nothing to format
-                }
-                case 's':
-                {
-                    source = static_cast<char*>( GET_ARG(void*) );
-                    if(source)
-                    {
-                        info.length = std::strlen(source);
-                        // Only calculate length on non-null pointers
-                    }
-                    // precision is treated as maximum width
-                    break;
-                }
-                case 'c':
-                {
-                    source[0] = static_cast<char>( GET_ARG(int) );
-                    info.length = 1;
-                    if(STRICT_COMPLIANCE)
-                    {
-                        precision = ~0u; // No max-width
-                    }
-                    break;
-                }
-                case 'p': { state.fmt_flags |= fmt_alt | fmt_pointer | fmt_signed; intsize = sizeof(void*); } PASSTHRU
-                case 'x': {                                base = base_hex;   goto got_int; }
-                case 'X': { state.fmt_flags |= fmt_ucbase; base = base_hex;   goto got_int; }
-                case 'o': {                                base = base_octal; goto got_int; }
-                case 'b': { if(SUPPORT_BINARY_FORMAT) { base = base_binary; } goto got_int; }
-                case 'd': /*PASSTHRU*/
-                case 'i': { state.fmt_flags |= fmt_signed; goto got_int; }
-                case 'u': default: got_int:
-                {
-                    intfmt_t value = 0;
+                        ++fmt;
 
-                    if(sizeof(long) != sizeof(long long)
-                    && intsize == sizeof(long long))  { value = GET_ARG(long long); }
-                    else if(sizeof(int) != sizeof(long)
-                         && intsize == sizeof(long))  { value = GET_ARG(long); }
+                        unsigned opt_index = SUPPORT_POSITIONAL_PARAMETERS ? read_param_index(fmt) : 0;
+                        GET_ARG(int,v,0, opt_index);
+
+                        if(v >= 0) { precision = v; } // negative value is treated as unset
+                    }
                     else
                     {
-                        value = GET_ARG(int);
-                        if(SUPPORT_H_LENGTHS && intsize != sizeof(int))
+                        precision = read_int(fmt, precision);
+                    }
+                }
+
+                unsigned char intsize = sizeof(int);
+                unsigned char base    = base_decimal;
+                switch(*fmt)
+                {
+                    case 't': if(!SUPPORT_T_LENGTH) break;
+                              intsize = sizeof(std::ptrdiff_t); ++fmt; break;
+                    case 'z': intsize = sizeof(std::size_t);    ++fmt; break;
+                    case 'l': intsize = sizeof(long);       if(*++fmt != 'l') break; PASSTHRU
+                    case 'L': intsize = sizeof(long long);      ++fmt; break; // Or 'long double'
+                    case 'j': if(!SUPPORT_J_LENGTH) break;
+                              intsize = sizeof(std::intmax_t);  ++fmt; break;
+                    case 'h': if(!SUPPORT_H_LENGTHS) break;
+                              intsize = sizeof(short);      if(*++fmt != 'h') break; /*PASSTHRU*/
+                              intsize = sizeof(char);           ++fmt; break;
+                }
+                state.fmt_flags = fmt_flags;
+
+                char* source = state.numbuffer;
+                prn::widthinfo info{0,0};
+
+                switch(*fmt)
+                {
+                    case '\0': goto unexpected;
+                    case 'n':
+                    {
+                        if(!SUPPORT_N_FORMAT) goto got_int;
+                        auto value = state.param - param;
+                        GET_ARG(void*,pointer,3, param_index);
+                        if(SUPPORT_POSITIONAL_PARAMETERS && round>1) continue;
+                        if(unlikely(intsize != sizeof(int)))
                         {
-                            if(sizeof(int) != sizeof(short) && intsize == sizeof(short)) { value = (signed short)value; }
-                            else /*if(sizeof(int) != sizeof(char) && intsize == sizeof(char))*/ { value = (signed char)value; }
+                            if(sizeof(long) != sizeof(long long)
+                            && intsize == sizeof(long long))  { *static_cast<long long*>(pointer) = value; }
+                            else if(sizeof(int) != sizeof(long)
+                                 && intsize == sizeof(long))  { *static_cast<long*>(pointer) = value; }
+                            else if(SUPPORT_H_LENGTHS
+                                 && sizeof(int) != sizeof(short)
+                                 && intsize == sizeof(short)) { *static_cast<short*>(pointer) = value; }
+                            else /*if(SUPPORT_H_LENGTHS
+                                 && sizeof(int) != sizeof(char)
+                                 && intsize == sizeof(char))*/{ *static_cast<signed char*>(pointer) = value; }
+                        }
+                        else                                  { *static_cast<int*>(pointer) = value; }
+                        continue; // Nothing to format
+                    }
+                    case 's':
+                    {
+                        GET_ARG(void*,pointer,3, param_index);
+                        source = static_cast<char*>(pointer);
+                        if(SUPPORT_POSITIONAL_PARAMETERS && round>1) continue;
+                        if(source)
+                        {
+                            info.length = std::strlen(source);
+                            // Only calculate length on non-null pointers
+                        }
+                        // precision is treated as maximum width
+                        break;
+                    }
+                    case 'c':
+                    {
+                        GET_ARG(int,c,0, param_index);
+                        source[0] = static_cast<char>(c);
+                        if(SUPPORT_POSITIONAL_PARAMETERS && round>1) continue;
+                        info.length = 1;
+                        if(STRICT_COMPLIANCE)
+                        {
+                            precision = ~0u; // No max-width
+                        }
+                        break;
+                    }
+                    case 'p': { state.fmt_flags |= fmt_alt | fmt_pointer | fmt_signed; intsize = sizeof(void*); } PASSTHRU
+                    case 'x': {                                base = base_hex;   goto got_int; }
+                    case 'X': { state.fmt_flags |= fmt_ucbase; base = base_hex;   goto got_int; }
+                    case 'o': {                                base = base_octal; goto got_int; }
+                    case 'b': { if(SUPPORT_BINARY_FORMAT) { base = base_binary; } goto got_int; }
+                    case 'd': /*PASSTHRU*/
+                    case 'i': { state.fmt_flags |= fmt_signed; goto got_int; }
+                    case 'u': default: got_int:
+                    {
+                        intfmt_t value = 0;
+
+                        if(sizeof(long) != sizeof(long long)
+                        && intsize == sizeof(long long))  { GET_ARG(long long,v,2, param_index); value = v; }
+                        else if(sizeof(int) != sizeof(long)
+                             && intsize == sizeof(long))  { GET_ARG(long,v,1, param_index); value = v; }
+                        else
+                        {
+                            GET_ARG(int,v,0, param_index); value = v;
+                            if(SUPPORT_H_LENGTHS && intsize != sizeof(int))
+                            {
+                                if(sizeof(int) != sizeof(short) && intsize == sizeof(short)) { value = (signed short)value; }
+                                else /*if(sizeof(int) != sizeof(char) && intsize == sizeof(char))*/ { value = (signed char)value; }
+                            }
+                        }
+                        if(SUPPORT_POSITIONAL_PARAMETERS && round>1) continue;
+                        if(!(state.fmt_flags & fmt_signed) && intsize < sizeof(uintfmt_t))
+                        {
+                            value &= ((uintfmt_t(1) << (8*intsize))-1);
+                        }
+
+                        info = state.format_integer(value, base, precision);
+                        precision = ~0u; // No max-width
+                        break;
+                    }
+
+                    case 'A': if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
+                    case 'a': if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; base = base_hex;
+                              if(precision == ~0u) { } /* TODO: set enough precision for exact representation */
+                              goto got_fmt_e;
+                    case 'E': if(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
+                    case 'e': if(!SUPPORT_FLOAT_FORMATS) goto got_int;
+                              // Set up 'e' flags
+                    got_fmt_e:state.fmt_flags |= fmt_exponent; // Mode: Always exponent
+                              goto got_flt;
+                    case 'G': if(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
+                    case 'g': if(!SUPPORT_FLOAT_FORMATS) goto got_int;
+                              // Set up 'g' flags
+                              state.fmt_flags |= fmt_autofloat; // Mode: Autodetect
+                              goto got_flt;
+                    case 'F': if(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
+                    case 'f': if(!SUPPORT_FLOAT_FORMATS) goto got_int; got_flt:
+                    {
+                        if(precision == ~0u) precision = 6;
+                        if(SUPPORT_LONG_DOUBLE && intsize == sizeof(long long))
+                        {
+                            GET_ARG(long double,value,5, param_index);
+                            if(SUPPORT_POSITIONAL_PARAMETERS && round>1) continue;
+                            info = state.format_float(value, base, precision);
+                        }
+                        else
+                        {
+                            GET_ARG(double,value,4, param_index);
+                            if(SUPPORT_POSITIONAL_PARAMETERS && round>1) continue;
+                            info = state.format_float(value, base, precision);
+                        }
+                        precision = ~0u; // No max-width
+                        break;
+                    }
+                    /* f,F: [-]ddd.ddd
+                     *                     Recognize [-]inf and nan (INF/NAN for 'F')
+                     *      Precision = Number of decimals after decimal point (assumed 6)
+                     *
+                     * e,E: [-]d.ddde+dd
+                     *                     Exactly one digit before decimal point
+                     *                     At least two digits in exponent
+                     *
+                     * g,G: Like e, if exponent is < -4 or >= precision
+                     *      Otherwise like f, but
+                     *
+                     * a,A: [-]0xh.hhhhp+d  Exactly one hex-digit before decimal point
+                     *                      Number of digits after it = precision.
+                     */
+                }
+                state.format_string(source, min_width, precision, info);
+                #undef GET_ARG
+            }
+        unexpected:;
+            unsigned n_params = max_explicit_param_index;
+            if(max_auto_param_index > n_params) n_params = max_auto_param_index;
+            switch(round)
+            {
+                case 3:
+                {
+                    if(!max_explicit_param_index)
+                    {
+                        // No positional parameters, jump to round 0
+                        round = 1;
+                        continue;
+                    }
+                    //printf("Allocated %u params\n", n_params);
+                    param_offset_table = new unsigned[n_params];
+                    break;
+                }
+                case 2:
+                {
+                    unsigned offset = 0;
+                    for(unsigned n=0; n<n_params; ++n)
+                    {
+                        unsigned size = param_offset_table[n]/8, typecode = param_offset_table[n]%8;
+                        //printf("Param %u (size=%u, type=%u) offset=%u\n", n+1, size,typecode, offset); fflush(stdout);
+                        param_offset_table[n] = offset*8 + typecode;
+                        offset += size;
+                    }
+                    //printf("Allocated %u bytes\n", offset);
+                    param_data_table = new unsigned char[offset];
+                    for(unsigned n=0; n<n_params; ++n)
+                    {
+                        unsigned char type = param_offset_table[n] % 8;
+                        param_offset_table[n] /= 8;
+                        unsigned char* tgt = &param_data_table[param_offset_table[n]];
+                        //printf("Writing type %u to offset %u\n", type, param_offset_table[n]); fflush(stdout);
+                        switch(type)
+                        {
+                            default:{ type0:; int v = va_arg(ap,int);     std::memcpy(tgt,&v,sizeof(v)); } break;
+                            case 1: { long      v = va_arg(ap,long);      std::memcpy(tgt,&v,sizeof(v)); } break;
+                            case 2: { long long v = va_arg(ap,long long); std::memcpy(tgt,&v,sizeof(v)); } break;
+                            case 3: { void*     v = va_arg(ap,void*);     std::memcpy(tgt,&v,sizeof(v)); } break;
+                            case 4: if(!SUPPORT_FLOAT_FORMATS) goto type0;
+                                    { double      v = va_arg(ap,double);      std::memcpy(tgt,&v,sizeof(v)); } break;
+                            case 5: if(!SUPPORT_FLOAT_FORMATS) goto type0;
+                                    { long double v = va_arg(ap,long double); std::memcpy(tgt,&v,sizeof(v)); } break;
                         }
                     }
-                    if(!(state.fmt_flags & fmt_signed) && intsize < sizeof(uintfmt_t))
-                    {
-                        value &= ((uintfmt_t(1) << (8*intsize))-1);
-                    }
-
-                    info = state.format_integer(value, base, precision);
-                    precision = ~0u; // No max-width
                     break;
                 }
-
-                case 'A': if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
-                case 'a': if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; base = base_hex;
-                          if(precision == ~0u) { } /* TODO: set enough precision for exact representation */
-                          goto got_fmt_e;
-                case 'E': if(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
-                case 'e': if(!SUPPORT_FLOAT_FORMATS) goto got_int;
-                          // Set up 'e' flags
-                got_fmt_e:state.fmt_flags |= fmt_exponent; // Mode: Always exponent
-                          goto got_flt;
-                case 'G': if(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
-                case 'g': if(!SUPPORT_FLOAT_FORMATS) goto got_int;
-                          // Set up 'g' flags
-                          state.fmt_flags |= fmt_autofloat; // Mode: Autodetect
-                          goto got_flt;
-                case 'F': if(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
-                case 'f': if(!SUPPORT_FLOAT_FORMATS) goto got_int; got_flt:
+                case 1:
                 {
-                    if(precision == ~0u) precision = 6;
-                    if(SUPPORT_LONG_DOUBLE && intsize == sizeof(long long))
-                    {
-                        long double value = GET_ARG(long double);
-                        info = state.format_float(value, base, precision);
-                    }
-                    else
-                    {
-                        double value = GET_ARG(double);
-                        info = state.format_float(value, base, precision);
-                    }
-                    precision = ~0u; // No max-width
-                    break;
+                    delete[] param_data_table;
+                    delete[] param_offset_table;
+                    goto exit_rounds;
                 }
-                /* f,F: [-]ddd.ddd
-                 *                     Recognize [-]inf and nan (INF/NAN for 'F')
-                 *      Precision = Number of decimals after decimal point (assumed 6)
-                 *
-                 * e,E: [-]d.ddde+dd
-                 *                     Exactly one digit before decimal point
-                 *                     At least two digits in exponent
-                 *
-                 * g,G: Like e, if exponent is < -4 or >= precision
-                 *      Otherwise like f, but
-                 *
-                 * a,A: [-]0xh.hhhhp+d  Exactly one hex-digit before decimal point
-                 *                      Number of digits after it = precision.
-                 */
             }
-            state.format_string(source, min_width, precision, info);
-            #undef GET_ARG
+            if(!SUPPORT_POSITIONAL_PARAMETERS) break;
         }
-    unexpected:;
+    exit_rounds:;
         state.flush();
         return state.param - param;
     }

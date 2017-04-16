@@ -147,27 +147,64 @@ int main()
                     return;
                 }
 
-                std::string FormatStr;
-                //FormatStr += '{';
-                FormatStr += '%';
-                FormatStr += flag;
-                if(wid1mode)
+                std::string start("%");
+                std::string w1p = wid1mode ?     std::to_string(wid1) : std::string{};
+                std::string w2p = wid2mode ? "."+std::to_string(wid2) : std::string{};
+                if(wid1mode == 2 && wid2mode == 2)
                 {
-                    if(wid1mode == 1)      FormatStr += std::to_string(wid1);
-                    else                   FormatStr += '*';
+                    RunTest(start + flag + "*.*" + format, wid1, wid2, param);
+                    if(SUPPORT_POSITIONAL_PARAMETERS)
+                    {
+                        RunTest(start + "3$" + flag + "*1$.*2$" + format, wid1, wid2, param);
+                        RunTest(start + "3$" + flag + "*2$.*1$" + format, wid2, wid1, param);
+                        RunTest(start + "2$" + flag + "*1$.*3$" + format, wid1, param, wid2);
+                        if(wid1 == wid2)
+                        {
+                            RunTest(start + "1$" + flag + "*2$.*2$" + format, param, wid1);
+                            RunTest(start + "2$" + flag + "*1$.*1$" + format, wid1, param);
+                        }
+                        #if __cplusplus >= 201700
+                        if constexpr(sizeof(param) == sizeof(int))
+                        {
+                            if((int)param == wid1)
+                            {
+                                RunTest(start + "1$" + flag + "*1$.*2$" + format, param, wid2);
+                            }
+                            if((int)param == wid2)
+                            {
+                                RunTest(start + "2$" + flag + "*1$.*2$" + format, wid1, param);
+                            }
+                        }
+                        #endif
+                    }
                 }
-                if(wid2mode)
+                else if(wid1mode == 2)
                 {
-                    FormatStr += '.';
-                    if(wid2mode == 1)      FormatStr += std::to_string(wid2);
-                    else                   FormatStr += '*';
+                    RunTest(start + flag + "*" + w2p + format, wid1, param);
+                    if(SUPPORT_POSITIONAL_PARAMETERS)
+                    {
+                        RunTest(start + "2$" + flag + "*1$" + w2p + format, wid1, param);
+                        RunTest(start + "1$" + flag + "*2$" + w2p + format, param, wid1);
+                    }
                 }
-                FormatStr += format;
-                //FormatStr += '}';
-                if(wid1mode == 2 && wid2mode == 2) RunTest(FormatStr, wid1, wid2, param);
-                else if(wid1mode == 2)             RunTest(FormatStr, wid1, param);
-                else if(wid2mode == 2)             RunTest(FormatStr, wid2, param);
-                else                               RunTest(FormatStr, param);
+                else if(wid2mode == 2)
+                {
+                    RunTest(start + flag + w1p + ".*" + format, wid2, param);
+                    if(SUPPORT_POSITIONAL_PARAMETERS)
+                    {
+                        RunTest(start + "2$" + flag + w1p + ".*1$" + format, wid2, param);
+                        RunTest(start + "1$" + flag + w1p + ".*2$" + format, param, wid2);
+                    }
+                }
+                else
+                {
+                    RunTest(start + flag + w1p + w2p + format, param);
+                    if(SUPPORT_POSITIONAL_PARAMETERS)
+                    {
+                        RunTest(start + "1$" + flag + w1p + w2p + format, param);
+                        RunTest(start + "01$" + flag + w1p + w2p + format, param);
+                    }
+                }
             };
             test("s", (const char*)nullptr);
             test("s", (const char*)"");
@@ -179,6 +216,7 @@ int main()
             test("p", (const void*)nullptr);
             test("p", (const void*)0x12345678);
             test("d", int(0));
+            test("d", int(3));
             test("d", int(-600000));
             test("d", int(600000));
             test("u", int(0));

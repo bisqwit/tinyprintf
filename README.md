@@ -33,6 +33,7 @@ and replace that function with code that is suitable for your project.
 * Min-width, min-precision, max-width, sign, space, justification modifiers are supported and fully standards-compliant (C99 / C++11)
 * Re-entrant code (e.g. it is safe to call `sprintf` within your stream I/O function invoked by `printf`)
 * Compatible with GCC’s optimizations where e.g. `printf("abc\n")` is automatically converted into `puts("abc")`
+* Positional parameters are fully supported (e.g. `printf("%2$s %1$d\n", 5, "test");`), disabled by default
 
 ## Caveats
 
@@ -40,6 +41,7 @@ and replace that function with code that is suitable for your project.
 * No buffering; all text is printed as soon as available, resulting in multiple calls of the I/O function (but as many bytes are printed with a single call as possible)
 * No file I/O: printing is only supported into a predefined output (such as through serial port), or into a string. Any `FILE*` pointer parameters are completely ignored
 * Data is never copied. Any pointers into strings are expected to be valid throughout the call to the printing function
+  * If positional parameters are enabled, parameters (pointers, but not the pointed data) are copied into a temporary dynamically allocated array though
 * `snprintf`, `vsnprintf`, `dprintf`, `vdprintf`, `asprintf`, and `vasprintf` are not included yet
   * Neither are `wprintf`, `fwprintf`, `swprintf`, `vwprintf`, `vfwprintf`, `vswprintf` etc.
 * Padding/cutting widths are limited to 4294967294 characters
@@ -50,7 +52,6 @@ and replace that function with code that is suitable for your project.
 
 Note that any of the following traits may change in future releases.
 
-* Positional parameters (e.g. `%5$d`) are not supported
 * The `'` and `I` flag characters are not supported
 * Length modifiers are ignored for `s`, `c` and `p` format types
   * I.e. `wchar_t` strings or `wint_t` chars are not supported.
