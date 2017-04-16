@@ -504,9 +504,6 @@ namespace myprintf
         state.param = param;
         state.put   = put;
 
-        unsigned*    param_offset_table = nullptr;
-        unsigned char* param_data_table = nullptr;
-
         /* Positional parameters support:
          * Pass 3: Calculate the number of parameters,
                    then allocate array of sizes
@@ -523,6 +520,7 @@ namespace myprintf
         //printf("---Interpret %s\n", fmt_begin);
 
         constexpr unsigned MAX_AUTO_PARAMS = 0x8000, MAX_ROUNDS = 4, POS_PARAM_MUL = MAX_AUTO_PARAMS * MAX_ROUNDS;
+        unsigned char* param_data_table = nullptr;
 
         // "Round" variable encodes, starting from lsb:
         //     - log2(MAX_AUTO_PARAMS) bits: number of auto params counted so far
@@ -530,8 +528,7 @@ namespace myprintf
         //     - The rest:                   maximum explicit param index found so far
         for(unsigned round = SUPPORT_POSITIONAL_PARAMETERS ? (3*MAX_AUTO_PARAMS) : 0; ; )
         {
-            auto process_param = [&round,param_offset_table,param_data_table]
-                                    (unsigned typecode, unsigned which_param_index, auto type)
+            auto process_param = [&round,param_data_table](unsigned typecode, unsigned which_param_index, auto type)
             {
                 if(which_param_index == 0)
                 {
@@ -543,6 +540,7 @@ namespace myprintf
                         round = round % POS_PARAM_MUL + which_param_index * POS_PARAM_MUL;
                     --which_param_index;
                 }
+                unsigned* param_offset_table = reinterpret_cast<unsigned *>(param_data_table);
                 switch((round / MAX_AUTO_PARAMS) % MAX_ROUNDS)
                 {
                     case 2:
@@ -575,7 +573,7 @@ namespace myprintf
                         ? process_param((sizeof(acquire_type)*8 + type_index), which_param_index, decltype(variable){}) \
                         : (/*std::printf("va_arg(%s)\n", #acquire_type),*/ va_arg(ap, acquire_type))
 
-                // Read possible position-index for the value
+                // Read possible position-index for the value (it comes before flags / widths)
                 unsigned param_index = SUPPORT_POSITIONAL_PARAMETERS ? read_param_index(fmt) : 0;
 
                 // Read format flags
@@ -626,21 +624,24 @@ namespace myprintf
                     }
                 }
 
-                // Read possible length modifier
-                constexpr unsigned BASE_MUL = 0x100;
-                unsigned size_base_spec = base_decimal + BASE_MUL*sizeof(int);
+                // Read possible length modifier.
+                // The numeric base is encoded into the same variable to reduce the number
+                // of local variables, thereby reducing register pressure, stack usage,
+                // spilling etc., resulting in a smaller compiled binary.
+                constexpr unsigned BASE_MUL = 0x10;
+                unsigned size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(int);
                 switch(*fmt)
                 {
                     case 't': if(!SUPPORT_T_LENGTH) break;
-                              size_base_spec = base_decimal + BASE_MUL*sizeof(std::ptrdiff_t); ++fmt; break;
-                    case 'z': size_base_spec = base_decimal + BASE_MUL*sizeof(std::size_t);    ++fmt; break;
-                    case 'l': size_base_spec = base_decimal + BASE_MUL*sizeof(long);       if(*++fmt != 'l') break; PASSTHRU
-                    case 'L': size_base_spec = base_decimal + BASE_MUL*sizeof(long long);      ++fmt; break; // Or 'long double'
+                              size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(std::ptrdiff_t); ++fmt; break;
+                    case 'z': size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(std::size_t);    ++fmt; break;
+                    case 'l': size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(long);       if(*++fmt != 'l') break; PASSTHRU
+                    case 'L': size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(long long);      ++fmt; break; // Or 'long double'
                     case 'j': if(!SUPPORT_J_LENGTH) break;
-                              size_base_spec = base_decimal + BASE_MUL*sizeof(std::intmax_t);  ++fmt; break;
+                              size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(std::intmax_t);  ++fmt; break;
                     case 'h': if(!SUPPORT_H_LENGTHS) break;
-                              size_base_spec = base_decimal + BASE_MUL*sizeof(short);      if(*++fmt != 'h') break; /*PASSTHRU*/
-                              size_base_spec = base_decimal + BASE_MUL*sizeof(char);           ++fmt; break;
+                              size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(short);      if(*++fmt != 'h') break; /*PASSTHRU*/
+                              size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(char);           ++fmt; break;
                 }
 
                 // Read the format type
@@ -701,10 +702,10 @@ namespace myprintf
                         break;
                     }
                     case 'p': { state.fmt_flags |= fmt_alt | fmt_pointer | fmt_signed; size_base_spec = BASE_MUL*sizeof(void*); } PASSTHRU
-                    case 'x': {                                size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + base_hex;   goto got_int; }
-                    case 'X': { state.fmt_flags |= fmt_ucbase; size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + base_hex;   goto got_int; }
-                    case 'o': {                                size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + base_octal; goto got_int; }
-                    case 'b': { if(SUPPORT_BINARY_FORMAT) { size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + base_binary; } goto got_int; }
+                    case 'x': {                                size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_hex-1);   goto got_int; }
+                    case 'X': { state.fmt_flags |= fmt_ucbase; size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_hex-1);   goto got_int; }
+                    case 'o': {                                size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_octal-1); goto got_int; }
+                    case 'b': { if(SUPPORT_BINARY_FORMAT) { size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_binary-1); } goto got_int; }
                     case 'd': /*PASSTHRU*/
                     case 'i': { state.fmt_flags |= fmt_signed; goto got_int; }
                     case 'u': default: got_int:
@@ -731,13 +732,13 @@ namespace myprintf
                             value &= ((uintfmt_t(1) << (8*(size_base_spec/BASE_MUL)))-1);
                         }
 
-                        info = state.format_integer(value, size_base_spec%BASE_MUL, precision);
+                        info = state.format_integer(value, size_base_spec%BASE_MUL+1, precision);
                         precision = ~0u; // No max-width
                         break;
                     }
 
                     case 'A': if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
-                    case 'a': if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + base_hex;
+                    case 'a': if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_hex-1);
                               if(precision == ~0u) { } /* TODO: set enough precision for exact representation */
                               goto got_fmt_e;
                     case 'E': if(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
@@ -758,13 +759,13 @@ namespace myprintf
                         {
                             GET_ARG(long double,value,5, param_index);
                             if(!action_round) continue;
-                            info = state.format_float(value, size_base_spec%BASE_MUL, precision);
+                            info = state.format_float(value, size_base_spec%BASE_MUL+1, precision);
                         }
                         else
                         {
                             GET_ARG(double,value,4, param_index);
                             if(!action_round) continue;
-                            info = state.format_float(value, size_base_spec%BASE_MUL, precision);
+                            info = state.format_float(value, size_base_spec%BASE_MUL+1, precision);
                         }
                         precision = ~0u; // No max-width
                         break;
@@ -784,6 +785,7 @@ namespace myprintf
                      *                      Number of digits after it = precision.
                      */
                 }
+                if(action_round) // This condition is redundant, but seems to reduce binary size
                 state.format_string(source, min_width, precision, info);
                 #undef GET_ARG
             }
@@ -798,35 +800,34 @@ namespace myprintf
             {
                 case 3:
                 {
-                    if(round < MAX_AUTO_PARAMS*MAX_ROUNDS)
+                    if(round/POS_PARAM_MUL == 0)
                     {
                         // No positional parameters, jump to round 0
                         round = 0;
                         continue;
                     }
-                    //printf("Allocated %u params\n", n_params);
-                    param_offset_table = new unsigned[n_params];
+                    // Figure out the largest parameter size
+                    std::size_t largest = std::max(sizeof(long long), sizeof(void*));
+                    if(SUPPORT_FLOAT_FORMATS) largest = std::max(largest, sizeof(double));
+                    if(SUPPORT_FLOAT_FORMATS && SUPPORT_LONG_DOUBLE) largest = std::max(largest, sizeof(long double));
+                    // Allocate room for offsets and parameters in one go.
+                    param_data_table = new unsigned char[n_params * (largest + sizeof(unsigned))];
+                    // It is likely we allocated too much (for example if all parameters are ints),
+                    // but this way we only need one allocation for the entire duration of the printf.
                     break;
                 }
                 case 2:
                 {
-                    unsigned offset = 0;
+                    unsigned offset = n_params * sizeof(unsigned);
+                    unsigned* param_offset_table = reinterpret_cast<unsigned *>(param_data_table);
                     for(unsigned n=0; n<n_params; ++n)
                     {
+                        // Convert the size & typecode into an offset
                         unsigned size = param_offset_table[n]/8, typecode = param_offset_table[n]%8;
-                        //printf("Param %u (size=%u, type=%u) offset=%u\n", n+1, size,typecode, offset); fflush(stdout);
-                        param_offset_table[n] = offset*8 + typecode;
-                        offset += size;
-                    }
-                    //printf("Allocated %u bytes\n", offset);
-                    param_data_table = new unsigned char[offset];
-                    for(unsigned n=0; n<n_params; ++n)
-                    {
-                        unsigned char type = param_offset_table[n] % 8;
-                        param_offset_table[n] /= 8;
-                        unsigned char* tgt = &param_data_table[param_offset_table[n]];
-                        //printf("Writing type %u to offset %u\n", type, param_offset_table[n]); fflush(stdout);
-                        switch(type)
+                        param_offset_table[n] = offset;
+                        // Load the parameter and store it
+                        unsigned char* tgt = &param_data_table[offset];
+                        switch(typecode)
                         {
                             default:{ type0:; int v = va_arg(ap,int);     std::memcpy(tgt,&v,sizeof(v)); } break;
                             case 1: { long      v = va_arg(ap,long);      std::memcpy(tgt,&v,sizeof(v)); } break;
@@ -834,16 +835,16 @@ namespace myprintf
                             case 3: { void*     v = va_arg(ap,void*);     std::memcpy(tgt,&v,sizeof(v)); } break;
                             case 4: if(!SUPPORT_FLOAT_FORMATS) goto type0;
                                     { double      v = va_arg(ap,double);      std::memcpy(tgt,&v,sizeof(v)); } break;
-                            case 5: if(!SUPPORT_FLOAT_FORMATS) goto type0;
+                            case 5: if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_LONG_DOUBLE) goto type0;
                                     { long double v = va_arg(ap,long double); std::memcpy(tgt,&v,sizeof(v)); } break;
                         }
+                        offset += size;
                     }
                     break;
                 }
                 case 1:
                 {
                     delete[] param_data_table;
-                    delete[] param_offset_table;
                 default:
                     goto exit_rounds;
                 }

@@ -330,5 +330,8 @@ int main()
             }
         }
     }
-    std::printf("%u tests run, %u tests failed\n", tests_run, tests_failed);
+    if(tests_failed)
+        std::printf("%u tests run, %u tests failed\n", tests_run, tests_failed);
+    else
+        std::printf("%u tests run, all OK\n", tests_run);
 }
