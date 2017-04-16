@@ -45,7 +45,7 @@ and replace that function with code that is suitable for your project.
   * If positional parameters are enabled, parameters (pointers, but not the pointed data) are copied into a temporary dynamically allocated array though
 * `snprintf`, `vsnprintf`, `dprintf`, `vdprintf`, `asprintf`, and `vasprintf` are not included yet
   * Neither are `wprintf`, `fwprintf`, `swprintf`, `vwprintf`, `vfwprintf`, `vswprintf` etc.
-* Padding/cutting widths are limited to 4294967294 characters
+* Padding/cutting widths are limited to 134217727 characters (2²⁷−1)
   * The minimum integer digits format modifier (such as %.10d) is limited to 22 digits (or 64 if SUPPORT_BINARY_FORMAT=true)
 * Behavior differs to GNU libc printf when a nul pointer is printed with `p` or `s` formats and max-width specifier is used
 * If positional parameters are enabled, there may be a maximum of 32767 parameters to printf.

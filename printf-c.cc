@@ -8,7 +8,7 @@
 
 static constexpr bool SUPPORT_BINARY_FORMAT = false;// Whether to support %b format type
 static constexpr bool STRICT_COMPLIANCE     = true;
-static constexpr bool SUPPORT_N_FORMAT      = false;// Whether to support %n format type
+static constexpr bool SUPPORT_N_FORMAT      = true; // Whether to support %n format type
 static constexpr bool SUPPORT_H_LENGTHS     = true; // Whether to support h and hh length modifiers
 static constexpr bool SUPPORT_T_LENGTH      = true; // Whether to support t length modifier
 static constexpr bool SUPPORT_J_LENGTH      = true; // Whether to support j length modifier
@@ -22,8 +22,8 @@ static constexpr bool SUPPORT_POSITIONAL_PARAMETERS = false;
  #define USED_FUNC  __attribute__((used,noinline))
  #pragma GCC push_options
  #pragma GCC optimize ("Ofast")
- //#pragma GCC optimize ("no-ipa-cp-clone")
- //#pragma GCC optimize ("conserve-stack")
+ #pragma GCC optimize ("no-ipa-cp-clone")
+ #pragma GCC optimize ("conserve-stack")
  //#pragma GCC optimize ("no-defer-pop")
  #define likely(x)   __builtin_expect(!!(x), 1)
  #define unlikely(x) __builtin_expect(!!(x), 0)
@@ -226,20 +226,11 @@ namespace myprintf
             unsigned char prefix_index = 0;
             if(fmt_flags & fmt_signed) // Pointers and signed values
             {
-                bool negative = value < 0;
-                if(negative)      { value = -value; prefix_index = prefix_minus; }
+                if(value < 0)     { value = -value; prefix_index = prefix_minus; }
                 else if(fmt_flags & fmt_plussign) { prefix_index = prefix_plus;  }
                 else if(fmt_flags & fmt_space)    { prefix_index = prefix_space; }
                 // GNU libc printf ignores '+' and ' ' modifiers on unsigned formats, but curiously, not for %p.
                 // Note that '+' overrides ' ' if both are used.
-            }
-
-            unsigned min_width = 1;
-            if(unlikely(precision != ~0u))
-            {
-                min_width = precision; // 0 is permitted
-                // This setting clears out zeropadding according to standard
-                if(STRICT_COMPLIANCE) { fmt_flags &= ~fmt_zeropad; }
             }
 
             unsigned width = estimate_uinteger_width(value, base);
@@ -258,6 +249,14 @@ namespace myprintf
                 }
             }
 
+            unsigned min_width = 1;
+            if(unlikely(precision != ~0u))
+            {
+                min_width = precision; // 0 is permitted
+                // This setting clears out zeropadding according to standard
+                if(STRICT_COMPLIANCE) { fmt_flags &= ~fmt_zeropad; }
+            }
+
             // Range check
             width = clamp(width, min_width, sizeof(numbuffer));
             put_uinteger(numbuffer, value, width, base, ((fmt_flags & fmt_ucbase) ? 'A' : 'a')-10);
@@ -268,8 +267,7 @@ namespace myprintf
         widthinfo format_float(FloatType value, unsigned char base, unsigned precision)
         {
             unsigned char prefix_index = 0;
-            bool negative = value < 0;
-            if(negative)      { value = -value; prefix_index = prefix_minus; }
+            if(value < 0)     { value = -value; prefix_index = prefix_minus; }
             else if(fmt_flags & fmt_plussign) { prefix_index = prefix_plus;  }
             else if(fmt_flags & fmt_space)    { prefix_index = prefix_space; }
 
@@ -407,49 +405,69 @@ namespace myprintf
              */
             char prefixbuffer[SUPPORT_FLOAT_FORMATS ? 4 : 3]; // Longest: +inf
             const char* stringconstants = GetStringConstants<SUPPORT_FLOAT_FORMATS>::GetTable();
-            unsigned char ctrl = stringconstants[2+PatternLength*2 + prefix_data_length-1 + info.prefix_index/4], prefixlen = ctrl/32;
+            unsigned char ctrl = stringconstants[2+PatternLength*2 + prefix_data_length-1 + info.prefix_index/4];
+            unsigned prefixlength = ctrl/32;
             const char* prefixsource = &stringconstants[2+PatternLength*2-1 + (ctrl%32)];
             const char* prefix = prefixsource;
             if(info.prefix_index & 3)
             {
                 prefixbuffer[0] = stringconstants[(info.prefix_index&3)-1];
-                std::memcpy(prefixbuffer+1, prefixsource, prefixlen++);
+                std::memcpy(prefixbuffer+1, prefixsource, prefixlength++);
                 prefix = prefixbuffer;
             }
 
             // Calculate length of prefix + source
-            unsigned combined_length = info.length + prefixlen;
+            unsigned sourcelength    = info.length;
+            unsigned combined_length = sourcelength + prefixlength;
             // Clamp it into maximum permitted width
             if(combined_length > max_width)
             {
                 combined_length = max_width;
                 // Figure out how to divide this between prefix and source
-                if(unlikely(combined_length <= prefixlen))
+                if(unlikely(combined_length <= prefixlength))
                 {
                     // Only room to print some of the prefix, and nothing of the source
-                    prefixlen   = combined_length;
-                    info.length = 0;
+                    prefixlength = combined_length;
+                    sourcelength = 0;
                 }
                 else
                 {
                     // Shorten the source, but print full prefix
-                    info.length = combined_length - prefixlen;
+                    sourcelength = combined_length - prefixlength;
                 }
             }
             // Calculate the padding width
-            unsigned pad = min_width > combined_length ? (min_width - combined_length) : 0;
-
+            unsigned pad_flags = min_width > combined_length ? min_width - combined_length : 0;
+            pad_flags |= prefixlength << 27; // max length 7 bytes = 3 bits
             // Choose the right mode
-            bool zeropad = (fmt_flags & fmt_zeropad) && (!STRICT_COMPLIANCE || likely(info.prefix_index < prefix_nil)); // Disable zero-padding for (nil), (null)
-            bool prefix_first = (fmt_flags & fmt_leftalign) || zeropad;
-            bool source_last  = !(fmt_flags & fmt_leftalign);
+            constexpr unsigned flag_prefix_first = 1u << 31;
+            constexpr unsigned flag_source_last  = 1u << 30;
+            constexpr unsigned noflags           = (1u << 27) - 1;
+            // To reduce the register pressure / spilling / compiled binary size,
+            // prefixlength and flags are encoded into the same variable that holds
+            // the padding width (pad_flags).
 
-            if(prefix_first)  append(prefix, prefixlen);
-            if(!source_last)  append(source, info.length);
-            append_spaces((zeropad && (!STRICT_COMPLIANCE || !(fmt_flags & fmt_leftalign)))
-                            ? (stringconstants+2+PatternLength) : (stringconstants+2), pad);
-            if(!prefix_first) append(prefix, prefixlen);
-            if(source_last)   append(source, info.length);
+            // Note: leftalign overrides zero-padding. Zero-padding also disabled for (nil),(null),nan,inf
+            if(fmt_flags & fmt_leftalign)
+            {
+                pad_flags |= flag_prefix_first;
+            }
+            else if((fmt_flags & fmt_zeropad) && (!STRICT_COMPLIANCE || likely(info.prefix_index < prefix_nil)))
+            {
+                pad_flags |= flag_prefix_first | flag_source_last;
+                stringconstants += PatternLength; // Zeropad
+            }
+            else
+            {
+                pad_flags |= flag_source_last;
+            }
+
+            // Only local variables needed here: prefix,source,stringconstants,pad_flags,sourcelength
+            if( (pad_flags & flag_prefix_first)) append(prefix, (pad_flags >> 27) & 7);
+            if(!(pad_flags & flag_source_last))  append(source, sourcelength);
+            append_spaces(stringconstants+2, pad_flags & noflags);
+            if(!(pad_flags & flag_prefix_first)) append(prefix, (pad_flags >> 27) & 7);
+            if( (pad_flags & flag_source_last))  append(source, sourcelength);
         }
     };
 
@@ -609,26 +627,26 @@ namespace myprintf
                 }
 
                 // Read possible length modifier
-                unsigned char intsize = sizeof(int);
-                unsigned char base    = base_decimal;
+                constexpr unsigned BASE_MUL = 0x100;
+                unsigned size_base_spec = base_decimal + BASE_MUL*sizeof(int);
                 switch(*fmt)
                 {
                     case 't': if(!SUPPORT_T_LENGTH) break;
-                              intsize = sizeof(std::ptrdiff_t); ++fmt; break;
-                    case 'z': intsize = sizeof(std::size_t);    ++fmt; break;
-                    case 'l': intsize = sizeof(long);       if(*++fmt != 'l') break; PASSTHRU
-                    case 'L': intsize = sizeof(long long);      ++fmt; break; // Or 'long double'
+                              size_base_spec = base_decimal + BASE_MUL*sizeof(std::ptrdiff_t); ++fmt; break;
+                    case 'z': size_base_spec = base_decimal + BASE_MUL*sizeof(std::size_t);    ++fmt; break;
+                    case 'l': size_base_spec = base_decimal + BASE_MUL*sizeof(long);       if(*++fmt != 'l') break; PASSTHRU
+                    case 'L': size_base_spec = base_decimal + BASE_MUL*sizeof(long long);      ++fmt; break; // Or 'long double'
                     case 'j': if(!SUPPORT_J_LENGTH) break;
-                              intsize = sizeof(std::intmax_t);  ++fmt; break;
+                              size_base_spec = base_decimal + BASE_MUL*sizeof(std::intmax_t);  ++fmt; break;
                     case 'h': if(!SUPPORT_H_LENGTHS) break;
-                              intsize = sizeof(short);      if(*++fmt != 'h') break; /*PASSTHRU*/
-                              intsize = sizeof(char);           ++fmt; break;
+                              size_base_spec = base_decimal + BASE_MUL*sizeof(short);      if(*++fmt != 'h') break; /*PASSTHRU*/
+                              size_base_spec = base_decimal + BASE_MUL*sizeof(char);           ++fmt; break;
                 }
-                state.fmt_flags = fmt_flags;
 
                 // Read the format type
-                char* source = state.numbuffer;
+                const char* source = state.numbuffer;
                 prn::widthinfo info{0,0};
+                state.fmt_flags = fmt_flags;
                 switch(*fmt)
                 {
                     case '\0': goto unexpected;
@@ -639,18 +657,18 @@ namespace myprintf
                         if(!action_round) continue;
 
                         auto value = state.param - param;
-                        if(unlikely(intsize != sizeof(int)))
+                        if(unlikely((size_base_spec/BASE_MUL) != sizeof(int)))
                         {
                             if(sizeof(long) != sizeof(long long)
-                            && intsize == sizeof(long long))  { *static_cast<long long*>(pointer) = value; }
+                            && (size_base_spec/BASE_MUL) == sizeof(long long))  { *static_cast<long long*>(pointer) = value; }
                             else if(sizeof(int) != sizeof(long)
-                                 && intsize == sizeof(long))  { *static_cast<long*>(pointer) = value; }
+                                 && (size_base_spec/BASE_MUL) == sizeof(long))  { *static_cast<long*>(pointer) = value; }
                             else if(SUPPORT_H_LENGTHS
                                  && sizeof(int) != sizeof(short)
-                                 && intsize == sizeof(short)) { *static_cast<short*>(pointer) = value; }
+                                 && (size_base_spec/BASE_MUL) == sizeof(short)) { *static_cast<short*>(pointer) = value; }
                             else /*if(SUPPORT_H_LENGTHS
                                  && sizeof(int) != sizeof(char)
-                                 && intsize == sizeof(char))*/{ *static_cast<signed char*>(pointer) = value; }
+                                 && (size_base_spec/BASE_MUL) == sizeof(char))*/{ *static_cast<signed char*>(pointer) = value; }
                         }
                         else                                  { *static_cast<int*>(pointer) = value; }
                         continue; // Nothing to format
@@ -660,7 +678,7 @@ namespace myprintf
                         GET_ARG(void*,pointer,3, param_index);
                         if(!action_round) continue;
 
-                        source = static_cast<char*>(pointer);
+                        source = static_cast<const char*>(pointer);
                         if(source)
                         {
                             info.length = std::strlen(source);
@@ -672,9 +690,9 @@ namespace myprintf
                     case 'c':
                     {
                         GET_ARG(int,c,0, param_index);
-
-                        source[0] = static_cast<char>(c);
                         if(!action_round) continue;
+
+                        state.numbuffer[0] = static_cast<char>(c);
                         info.length = 1;
                         if(STRICT_COMPLIANCE)
                         {
@@ -682,11 +700,11 @@ namespace myprintf
                         }
                         break;
                     }
-                    case 'p': { state.fmt_flags |= fmt_alt | fmt_pointer | fmt_signed; intsize = sizeof(void*); } PASSTHRU
-                    case 'x': {                                base = base_hex;   goto got_int; }
-                    case 'X': { state.fmt_flags |= fmt_ucbase; base = base_hex;   goto got_int; }
-                    case 'o': {                                base = base_octal; goto got_int; }
-                    case 'b': { if(SUPPORT_BINARY_FORMAT) { base = base_binary; } goto got_int; }
+                    case 'p': { state.fmt_flags |= fmt_alt | fmt_pointer | fmt_signed; size_base_spec = BASE_MUL*sizeof(void*); } PASSTHRU
+                    case 'x': {                                size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + base_hex;   goto got_int; }
+                    case 'X': { state.fmt_flags |= fmt_ucbase; size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + base_hex;   goto got_int; }
+                    case 'o': {                                size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + base_octal; goto got_int; }
+                    case 'b': { if(SUPPORT_BINARY_FORMAT) { size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + base_binary; } goto got_int; }
                     case 'd': /*PASSTHRU*/
                     case 'i': { state.fmt_flags |= fmt_signed; goto got_int; }
                     case 'u': default: got_int:
@@ -694,32 +712,32 @@ namespace myprintf
                         intfmt_t value = 0;
 
                         if(sizeof(long) != sizeof(long long)
-                        && intsize == sizeof(long long))  { GET_ARG(long long,v,2, param_index); value = v; }
+                        && (size_base_spec/BASE_MUL) == sizeof(long long))  { GET_ARG(long long,v,2, param_index); value = v; }
                         else if(sizeof(int) != sizeof(long)
-                             && intsize == sizeof(long))  { GET_ARG(long,v,1, param_index); value = v; }
+                             && (size_base_spec/BASE_MUL) == sizeof(long))  { GET_ARG(long,v,1, param_index); value = v; }
                         else
                         {
                             GET_ARG(int,v,0, param_index);
                             value = v;
-                            if(SUPPORT_H_LENGTHS && intsize != sizeof(int))
+                            if(SUPPORT_H_LENGTHS && (size_base_spec/BASE_MUL) != sizeof(int))
                             {
-                                if(sizeof(int) != sizeof(short) && intsize == sizeof(short)) { value = (signed short)value; }
-                                else /*if(sizeof(int) != sizeof(char) && intsize == sizeof(char))*/ { value = (signed char)value; }
+                                if(sizeof(int) != sizeof(short) && (size_base_spec/BASE_MUL) == sizeof(short)) { value = (signed short)value; }
+                                else /*if(sizeof(int) != sizeof(char) && (size_base_spec/BASE_MUL) == sizeof(char))*/ { value = (signed char)value; }
                             }
                         }
                         if(!action_round) continue;
-                        if(!(state.fmt_flags & fmt_signed) && intsize < sizeof(uintfmt_t))
+                        if(!(state.fmt_flags & fmt_signed) && (size_base_spec/BASE_MUL) < sizeof(uintfmt_t))
                         {
-                            value &= ((uintfmt_t(1) << (8*intsize))-1);
+                            value &= ((uintfmt_t(1) << (8*(size_base_spec/BASE_MUL)))-1);
                         }
 
-                        info = state.format_integer(value, base, precision);
+                        info = state.format_integer(value, size_base_spec%BASE_MUL, precision);
                         precision = ~0u; // No max-width
                         break;
                     }
 
                     case 'A': if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
-                    case 'a': if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; base = base_hex;
+                    case 'a': if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + base_hex;
                               if(precision == ~0u) { } /* TODO: set enough precision for exact representation */
                               goto got_fmt_e;
                     case 'E': if(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
@@ -736,17 +754,17 @@ namespace myprintf
                     case 'f': if(!SUPPORT_FLOAT_FORMATS) goto got_int; got_flt:
                     {
                         if(precision == ~0u) precision = 6;
-                        if(SUPPORT_LONG_DOUBLE && intsize == sizeof(long long))
+                        if(SUPPORT_LONG_DOUBLE && (size_base_spec/BASE_MUL) == sizeof(long long))
                         {
                             GET_ARG(long double,value,5, param_index);
                             if(!action_round) continue;
-                            info = state.format_float(value, base, precision);
+                            info = state.format_float(value, size_base_spec%BASE_MUL, precision);
                         }
                         else
                         {
                             GET_ARG(double,value,4, param_index);
                             if(!action_round) continue;
-                            info = state.format_float(value, base, precision);
+                            info = state.format_float(value, size_base_spec%BASE_MUL, precision);
                         }
                         precision = ~0u; // No max-width
                         break;
