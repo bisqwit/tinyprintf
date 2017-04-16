@@ -24,6 +24,8 @@ static void PrintParams() { }
 template<typename... Params> static void PrintParams(int arg, Params... rest);
 template<typename... Params> static void PrintParams(long arg, Params... rest);
 template<typename... Params> static void PrintParams(long long arg, Params... rest);
+template<typename... Params> static void PrintParams(long double arg, Params... rest);
+template<typename... Params> static void PrintParams(double arg, Params... rest);
 template<typename... Params> static void PrintParams(const void* arg, Params... rest);
 template<typename... Params> static void PrintParams(const char* arg, Params... rest);
 
@@ -43,6 +45,18 @@ template<typename... Params>
 static void PrintParams(long long arg, Params... rest)
 {
     std::printf(", %lldll", arg);
+    PrintParams(rest...);
+}
+template<typename... Params>
+static void PrintParams(long double arg, Params... rest)
+{
+    std::printf(", %#.14Lgl", arg);
+    PrintParams(rest...);
+}
+template<typename... Params>
+static void PrintParams(double arg, Params... rest)
+{
+    std::printf(", %#.14g", arg);
     PrintParams(rest...);
 }
 template<typename... Params>
@@ -127,6 +141,11 @@ int main()
                     //        Libc prints "  3", we print "003"
                     return;
                 }*/
+                if((format_char=='e' || format_char=='f' || format_char=='g' || format_char=='a'
+                 || format_char=='E' || format_char=='F' || format_char=='G' || format_char=='A') && wid2>=16)
+                {
+                    return;
+                }
 
                 std::string FormatStr;
                 //FormatStr += '{';
@@ -177,26 +196,50 @@ int main()
             test("llu", (long long)(0));
             test("llu", (long long)(-60000000000000ll));
             test("llu", (long long)(60000000000000ll));
-            test("hd", int(0));
-            test("hd", int(20000));
-            test("hd", int(-20000));
-            test("hd", int(-600000));
-            test("hd", int(600000));
-            test("hu", int(0));
-            test("hu", int(20000));
-            test("hu", int(-20000));
-            test("hu", int(-600000));
-            test("hu", int(600000));
-            test("hhd", int(0));
-            test("hhd", int(100));
-            test("hhd", int(-100));
-            test("hhd", int(-600000));
-            test("hhd", int(600000));
-            test("hhu", int(0));
-            test("hhu", int(100));
-            test("hhu", int(-100));
-            test("hhu", int(-600000));
-            test("hhu", int(600000));
+            if(SUPPORT_H_FORMATS)
+            {
+                test("hd", int(0));
+                test("hd", int(20000));
+                test("hd", int(-20000));
+                test("hd", int(-600000));
+                test("hd", int(600000));
+                test("hu", int(0));
+                test("hu", int(20000));
+                test("hu", int(-20000));
+                test("hu", int(-600000));
+                test("hu", int(600000));
+                test("hhd", int(0));
+                test("hhd", int(100));
+                test("hhd", int(-100));
+                test("hhd", int(-600000));
+                test("hhd", int(600000));
+                test("hhu", int(0));
+                test("hhu", int(100));
+                test("hhu", int(-100));
+                test("hhu", int(-600000));
+                test("hhu", int(600000));
+            }
+            if(SUPPORT_FLOAT_FORMATS)
+            {
+                test("e", 10000.);
+                test("e", 0.000123456789);
+                test("e", 1.23456789);
+                test("e", 123456.789);
+                test("e", 1.5e42);
+                test("e", 1.5e-42);
+                test("e", 9.9999);
+                test("e", 0.);
+                test("e", 1./0.);
+                test("f", 10000.);
+                test("f", 0.000123456789);
+                test("f", 1.23456789);
+                test("f", 123456.789);
+                test("f", 1.5e6);
+                test("f", 1.5e-6);
+                test("f", 9.9999);
+                test("f", 0.);
+                test("f", 1./0.);
+            }
         }
     }
     std::printf("%u tests run, %u tests failed\n", tests_run, tests_failed);

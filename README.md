@@ -51,7 +51,6 @@ and replace that function with code that is suitable for your project.
 Note that any of the following traits may change in future releases.
 
 * Positional parameters (e.g. `%5$d`) are not supported
-* Floating point formats (`e`, `E`, `f`, `F`, `g`, `G`, `a`, and `A`) are not supported
 * The `'` and `I` flag characters are not supported
 * Length modifiers are ignored for `s`, `c` and `p` format types
   * I.e. `wchar_t` strings or `wint_t` chars are not supported.
@@ -59,6 +58,10 @@ Note that any of the following traits may change in future releases.
 * Any other format type than `n`, `s`, `c`, `p`, `x`, `X`, `o`, or `b` is treated as if `d` was used
   * `d` and `i` are equivalent and have the same meaning
   * This includes unsupported combinations and permutations of length modifier letters
+
+## Known bugs
+
+* Floating point support (formats `e`, `E`, `f`, `F`, `g`, `G`, `a`, and `A`) is all sorts of broken and disabled by default
 
 ## Rationale
 

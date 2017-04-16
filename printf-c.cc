@@ -2,12 +2,16 @@
 #include <cstring>
 #include <cstdarg>
 #include <cstdint>
+#include <cmath>
 
 static constexpr bool SUPPORT_BINARY_FORMAT = false;// Whether to support b format type
 static constexpr bool STRICT_COMPLIANCE     = true;
 static constexpr bool SUPPORT_H_FORMATS     = true; // Whether to support h and hh length modifiers
 static constexpr bool SUPPORT_T_FORMAT      = true; // Whether to support t length modifier
 static constexpr bool SUPPORT_J_FORMAT      = true; // Whether to support j length modifier
+static constexpr bool SUPPORT_FLOAT_FORMATS = false; // Floating pointing formats
+static constexpr bool SUPPORT_A_FORMAT      = false; // Floating point hex format
+static constexpr bool SUPPORT_LONG_DOUBLE   = false;
 
 #ifdef __GNUC__
  #define NOINLINE   __attribute__((noinline))
@@ -60,30 +64,36 @@ namespace myprintf
     static constexpr unsigned char fmt_ucbase    = 0x20; // capital hex (%X)
     static constexpr unsigned char fmt_signed    = 0x40; // d,i,p formats
     static constexpr unsigned char fmt_pointer   = 0x80; // p format
+    static constexpr unsigned char fmt_exponent  = 0x40;
+    static constexpr unsigned char fmt_autofloat = 0x80;
 
     static constexpr unsigned PatternLength = 8; // number of spaces/zeros in stringconstants
     static const char stringconstants[] {
+        '-','+',/*' ',*/
         // eight spaces
         ' ',' ',' ',' ', ' ',' ',' ',' ',
         // eight zeros
         '0','0','0','0', '0','0','0','0',
-        // table of beginnings and lengths for all different prefixes (length: 14)
-        0,       1*32+0,  1*32+3, 1*32+6,   // "-+ "
-        2*32+1,  3*32+0,  3*32+3, 3*32+6,   // "-+ " with "0x"
-        2*32+15, 3*32+14, 3*32+17, 3*32+20, // "-+ " with "0X"
-        char(5*32+9), char(6*32+23), // (nil) and (null)
-        // table of multichar prefixes (3*3+5+3*3+6 = 29 characters
-        '-','0','x','+','0','x',' ','0','x','(','n','i','l',')',
-        '-','0','X','+','0','X',' ','0','X','(','n','u','l','l',')'
+        // table of some multichar prefixes (27 letters)
+        (0),                            // none
+        (2*32+0), (3*32+2),  (3*32+5),  // 0x,nan,inf
+        (2*32+8), (3*32+10), (3*32+13), // 0X,NAN,INF
+        char(5*32+16), char(6*32+21),
+        '0','x','n','a','n','i','n','f',
+        '0','X','N','A','N','I','N','F',
+        '(','n','i','l',')', '(','n','u','l','l',')',
     };
     static constexpr unsigned char prefix_minus = 1;
     static constexpr unsigned char prefix_plus  = 2;
     static constexpr unsigned char prefix_space = 3;
-    static constexpr unsigned char prefix_0x    = 4; // 4..7
-    static constexpr unsigned char prefix_0X    = 8; // 8..11
-    static constexpr unsigned char prefix_nil   = 12;
-    static constexpr unsigned char prefix_null  = 13;
-    static constexpr unsigned num_prefixes = 14;
+    static constexpr unsigned char prefix_0x    = 4*1;
+    static constexpr unsigned char prefix_0X    = 4*2;
+    static constexpr unsigned char prefix_nan   = 4*3;
+    static constexpr unsigned char prefix_NAN   = 4*4;
+    static constexpr unsigned char prefix_inf   = 4*5;
+    static constexpr unsigned char prefix_INF   = 4*6;
+    static constexpr unsigned char prefix_nil   = 4*7;
+    static constexpr unsigned char prefix_null  = 4*8;
 
     struct prn
     {
@@ -127,14 +137,51 @@ namespace myprintf
             std::size_t   length;
             unsigned char prefix_index;
         };
-        widthinfo format_integer(intfmt_t value, unsigned char base, unsigned max_width)
+
+        static unsigned clamp(unsigned value, unsigned minvalue, unsigned maxvalue)
+        {
+            if(value < minvalue) value = minvalue;
+            if(value > maxvalue) value = maxvalue;
+            return value;
+        }
+        static unsigned estimate_uinteger_width(uintfmt_t uvalue, unsigned char base) NOINLINE
+        {
+            unsigned width=0;
+            while(uvalue != 0)
+            {
+                ++width;
+                uvalue /= base;
+            }
+            return width;
+        }
+        unsigned put_uinteger(char* target, uintfmt_t uvalue, unsigned min_width, unsigned max_width, unsigned char base) NOINLINE
+        {
+            char lett = ((fmt_flags & fmt_ucbase) ? 'A' : 'a')-10;
+
+            unsigned width = estimate_uinteger_width(uvalue, base);
+            if(unlikely(fmt_flags & fmt_alt) && likely(uvalue != 0) && base == 8)
+            {
+                width += 1; // Add '0' prefix
+            }
+
+            // Range check
+            width = clamp(width, min_width, max_width);
+            for(unsigned w=width; w-- > 0; )
+            {
+                unsigned digitvalue = uvalue % base; uvalue /= base;
+                target[w] = digitvalue + (digitvalue < 10 ? '0' : lett);
+            }
+            return width;
+        }
+
+        widthinfo format_integer(intfmt_t value, unsigned char base, unsigned precision)
         {
             // Maximum length is ceil(log8(2^64)) = ceil(64/3) = 22 characters
             static_assert(sizeof(numbuffer) >= (SUPPORT_BINARY_FORMAT ? 64 : 22), "Too small numbuffer");
 
             if(unlikely((fmt_flags & fmt_pointer) && !value)) // (nil) and %p
             {
-                return {0, prefix_nil}; // Discards other prefixes
+                return {0, prefix_nil}; // No other prefix
             }
 
             unsigned char prefix_index = 0;
@@ -148,48 +195,149 @@ namespace myprintf
                 // Note that '+' overrides ' ' if both are used.
             }
 
-            uintfmt_t uvalue = value;
-            char     lett = ((fmt_flags & fmt_ucbase) ? 'A' : 'a')-10;
-
-            unsigned width = 0;
-            for(uintfmt_t uvalue_test = uvalue; uvalue_test != 0 || (!STRICT_COMPLIANCE && width==0); )
+            unsigned min_width = 1;
+            if(unlikely(precision != ~0u))
             {
-                ++width;
-                uvalue_test /= base;
-            }
-            if(unlikely(fmt_flags & fmt_alt) && likely(uvalue != 0))
-            {
-                switch(base)
-                {
-                    case 8:  width += 1; break; // Add '0' prefix
-                    case 16: prefix_index += (fmt_flags & fmt_ucbase) ? prefix_0X : prefix_0x; break; // Add 0x/0X prefix
-                }
-            }
-            // For integers, the length limit (.xx) has a different meaning:
-            // Minimum number of digits printed.
-            if(unlikely(max_width != ~0u))
-            {
-                if(max_width > width) width = max_width; // width can only grow here.
+                min_width = precision; // 0 is permitted
                 // This setting clears out zeropadding according to standard
                 if(STRICT_COMPLIANCE) { fmt_flags &= ~fmt_zeropad; }
             }
-            else if(STRICT_COMPLIANCE && width == 0)
+            if(unlikely(fmt_flags & fmt_alt) && value != 0 && base == 16)
             {
-                // Zero-width is permitted if explicitly specified,
-                // but otherwise we always print at least 1 digit.
-                width = 1;
+                prefix_index += (fmt_flags & fmt_ucbase) ? prefix_0X : prefix_0x; // Add 0x/0X prefix
             }
 
-            // Range check
-            if(unlikely(width > sizeof(numbuffer))) width = sizeof(numbuffer);
-
-            for(unsigned w=width; w-- > 0; )
-            {
-                unsigned digitvalue = uvalue % base; uvalue /= base;
-                numbuffer[w] = digitvalue + (digitvalue < 10 ? '0' : lett);
-            }
+            unsigned width = put_uinteger(numbuffer, value, min_width, sizeof(numbuffer), base);
             return {width, prefix_index};
         }
+
+        template<typename FloatType>
+        widthinfo format_float(FloatType value, unsigned char base, unsigned precision)
+        {
+            unsigned char prefix_index = 0;
+            bool negative = value < 0;
+            if(negative)   { value = -value; prefix_index = prefix_minus; }
+            else if(fmt_flags & fmt_plussign) { prefix_index = prefix_plus;  }
+            else if(fmt_flags & fmt_space)    { prefix_index = prefix_space; }
+
+            if(!std::isfinite(value))
+            {
+                return {0, (unsigned char)(prefix_index | (
+                                    std::isinf(value) ? ((fmt_flags & fmt_ucbase) ? prefix_INF : prefix_inf)
+                                                      : ((fmt_flags & fmt_ucbase) ? prefix_NAN : prefix_nan)))};
+            }
+
+            int e_exponent=0;
+
+            if(SUPPORT_A_FORMAT && base == base_hex)
+            {
+                value = std::frexp(value, &e_exponent);
+                while(value > 0 && value*2 < 0x10) { value *= 2; --e_exponent; }
+            }
+            else if(value != FloatType(0))
+            {
+                e_exponent = std::floor(std::log10(value));
+            }
+
+            if(precision == ~0u) precision = 6;
+            if(fmt_flags & fmt_autofloat)
+            {
+                // Mode: Let X = E-style exponent, P = chosen precision.
+                //       If P > X >= -4, choose 'f' and P = P-1-X.
+                //       Else,           choose 'e' and P = P-1.
+                if(!precision) precision = 1;
+                if(int(precision) > e_exponent && e_exponent >= -4) { precision -= e_exponent+1; }
+                else                                                { precision -= 1; fmt_flags |= fmt_exponent; }
+            }
+
+            int head_width = 1;
+
+            /* Round the value into the specified precision */
+            uintfmt_t uvalue = 0;
+            if(value != FloatType(0))
+            {
+                if(!(fmt_flags & fmt_exponent))
+                {
+                    head_width = 1 + e_exponent;
+                }
+                unsigned total_precision = precision;
+                /*if(head_width > 0)*/ total_precision += head_width;
+
+                // Create a scaling factor where all desired decimals are in the integer portion
+                FloatType factor = std::pow(FloatType(10), FloatType(total_precision - std::ceil(std::log10(value))));
+                //auto ovalue = value;
+                auto rvalue = std::round(value * factor);
+                uvalue = rvalue;
+                // Scale it back
+                value = rvalue / factor;
+                // Recalculate exponent from rounded value
+                e_exponent = std::floor(std::log10(value));
+                if(!(fmt_flags & fmt_exponent))
+                {
+                    head_width = 1 + e_exponent;
+                }
+
+                /*std::printf("Value %.12g rounded to %u decimals: %.12g, %lu  head_width=%d\n",
+                    ovalue, total_precision, value, uvalue, head_width);*/
+            }
+
+            unsigned exponent_width = 0;
+            unsigned point_width    = (precision > 0 || (fmt_flags & fmt_alt)) ? 1 : 0;
+            unsigned decimals_width = clamp(precision, 0, sizeof(numbuffer)-exponent_width-point_width-head_width);
+
+            // Count the number of digits
+            uintfmt_t digits = estimate_uinteger_width(uvalue, 10);
+            uintfmt_t scale    = std::pow(FloatType(10), FloatType(int(digits - head_width)));
+            if(!scale) scale=1;
+            uintfmt_t head     = uvalue / scale;
+            uintfmt_t fraction = uvalue % scale;
+            //uintfmt_t scale2   = uintfmt_t(std::pow(FloatType(10), FloatType(-head_width)));
+            //if(head_width < 0 && scale2 != 0) fraction /= scale2;
+
+            /*std::printf("- digits in %lu=%lu, scale=%lu, head=%lu, fraction=%lu\n",
+                uvalue,digits, scale, head,fraction);*/
+
+            if(head_width < 1) head_width = 1;
+
+            if(fmt_flags & fmt_exponent)
+            {
+            /*
+                auto vv = value * std::pow(FloatType(10), FloatType(-e_exponent));
+
+                fraction = std::modf(vv, &head);
+                //if(value != FloatType(0) && head == FloatType(0)) { vv *= 10; fraction = std::modf(vv, &head); --e_exponent; }
+
+                auto uf = fraction;
+                fraction = std::round(fraction * std::pow(FloatType(10), FloatType(int(precision))));
+                std::printf("%.20g -> %.20g split into head=%.20g, fraction=%.20g -> %.20g using exponents %d\n",
+                    value,vv,head,uf,fraction,
+                    e_exponent);
+            */
+                exponent_width =
+                    clamp(estimate_uinteger_width(e_exponent<0 ? -e_exponent : e_exponent, 10),
+                          2,
+                          sizeof(numbuffer)-3-head_width) + 2;
+            }
+            else
+            {
+            }
+
+            unsigned tgt = put_uinteger(numbuffer + 0, head, head_width, head_width, 10);
+            if(point_width)
+            {
+                numbuffer[tgt] = '.'; tgt += 1;
+                tgt += put_uinteger(numbuffer + tgt, fraction, decimals_width, decimals_width, 10);
+            }
+            if(exponent_width)
+            {
+                numbuffer[tgt++] = ((fmt_flags & fmt_ucbase) ? 'E' : 'e');
+                numbuffer[tgt++] = ((e_exponent < 0)         ? '-' : '+');
+                tgt += put_uinteger(numbuffer + tgt, e_exponent<0 ? -e_exponent : e_exponent,
+                                    exponent_width-2, exponent_width-2, 10);
+            }
+            return {tgt, prefix_index};
+        }
+
         void append_spaces(const char* from, unsigned count)
         {
             while(count > 0)
@@ -212,9 +360,19 @@ namespace myprintf
              * Note that in case of zeropad+leftalign,
              * zeropad is disregarded according to the standard.
              */
-            const unsigned char ctrl = stringconstants[PatternLength*2 + info.prefix_index];
-            const char* const prefix = &stringconstants[PatternLength*2 + num_prefixes] + (ctrl%32);
-            unsigned prefixlen = ctrl/32;
+            char prefixbuffer[4]; // Longest: +inf
+            unsigned char ctrl = stringconstants[2+PatternLength*2 + info.prefix_index/4], prefixlen = ctrl/32;
+            const char* prefixsource = &stringconstants[2+PatternLength*2+9 + (ctrl%32)];
+            const char* prefix = prefixbuffer;
+            if(info.prefix_index & 3)
+            {
+                prefixbuffer[0] = stringconstants[(info.prefix_index&3)-1];
+                std::memcpy(prefixbuffer+1, prefixsource, prefixlen++);
+            }
+            else
+            {
+                prefix = prefixsource;
+            }
 
             // Calculate length of prefix + source
             unsigned combined_length = info.length + prefixlen;
@@ -246,7 +404,7 @@ namespace myprintf
             if(prefix_first)  append(prefix, prefixlen);
             if(!source_last)  append(source, info.length);
             append_spaces((zeropad && (!STRICT_COMPLIANCE || !(fmt_flags & fmt_leftalign)))
-                            ? (stringconstants+PatternLength) : (stringconstants), pad);
+                            ? (stringconstants+2+PatternLength) : (stringconstants+2), pad);
             if(!prefix_first) append(prefix, prefixlen);
             if(source_last)   append(source, info.length);
         }
@@ -329,7 +487,7 @@ namespace myprintf
                           intsize = sizeof(std::ptrdiff_t); ++fmt; break;
                 case 'z': intsize = sizeof(std::size_t);    ++fmt; break;
                 case 'l': intsize = sizeof(long);       if(*++fmt != 'l') break; PASSTHRU
-                case 'L': intsize = sizeof(long long);      ++fmt; break;
+                case 'L': intsize = sizeof(long long);      ++fmt; break; // Or 'long double'
                 case 'j': if(!SUPPORT_J_FORMAT) break;
                           intsize = sizeof(std::intmax_t);  ++fmt; break;
                 case 'h': if(!SUPPORT_H_FORMATS) break;
@@ -389,9 +547,9 @@ namespace myprintf
                 case 'b': { if(SUPPORT_BINARY_FORMAT) { base = base_binary; } goto got_int; }
                 case 'd': /*PASSTHRU*/
                 case 'i': { state.fmt_flags |= fmt_signed; goto got_int; }
-                case 'u': got_int:
+                case 'u': default: got_int:
                 {
-                    {intfmt_t value = 0;
+                    intfmt_t value = 0;
 
                     if(sizeof(long) != sizeof(long long)
                     && intsize == sizeof(long long))  { value = GET_ARG(long long); }
@@ -411,10 +569,56 @@ namespace myprintf
                         value &= ((uintfmt_t(1) << (8*intsize))-1);
                     }
 
-                    info = state.format_integer(value, base, precision);}
+                    info = state.format_integer(value, base, precision);
                     precision = ~0u; // No max-width
                     break;
                 }
+
+                case 'A': if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
+                case 'a': if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; base = base_hex;
+                          if(precision == ~0u) { } /* TODO: set enough precision for exact representation */
+                          goto got_fmt_e;
+                case 'E': if(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
+                case 'e': if(!SUPPORT_FLOAT_FORMATS) goto got_int;
+                          // Set up 'e' flags
+                got_fmt_e:state.fmt_flags |= fmt_exponent; // Mode: Always exponent
+                          goto got_flt;
+                case 'G': if(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
+                case 'g': if(!SUPPORT_FLOAT_FORMATS) goto got_int;
+                          // Set up 'g' flags
+                          state.fmt_flags |= fmt_autofloat; // Mode: Autodetect
+                          goto got_flt;
+                case 'F': if(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
+                case 'f': if(!SUPPORT_FLOAT_FORMATS) goto got_int; got_flt:
+                {
+                    if(precision == ~0u) precision = 6;
+                    if(SUPPORT_LONG_DOUBLE && intsize == sizeof(long long))
+                    {
+                        long double value = GET_ARG(long double);
+                        info = state.format_float(value, base, precision);
+                    }
+                    else
+                    {
+                        double value = GET_ARG(double);
+                        info = state.format_float(value, base, precision);
+                    }
+                    precision = ~0u; // No max-width
+                    break;
+                }
+                /* f,F: [-]ddd.ddd
+                 *                     Recognize [-]inf and nan (INF/NAN for 'F')
+                 *      Precision = Number of decimals after decimal point (assumed 6)
+                 *
+                 * e,E: [-]d.ddde+dd
+                 *                     Exactly one digit before decimal point
+                 *                     At least two digits in exponent
+                 *
+                 * g,G: Like e, if exponent is < -4 or >= precision
+                 *      Otherwise like f, but
+                 *
+                 * a,A: [-]0xh.hhhhp+d  Exactly one hex-digit before decimal point
+                 *                      Number of digits after it = precision.
+                 */
             }
             state.format_string(source, min_width, precision, info);
             #undef GET_ARG
