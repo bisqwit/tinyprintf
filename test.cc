@@ -196,6 +196,12 @@ int main()
             test("llu", (long long)(0));
             test("llu", (long long)(-60000000000000ll));
             test("llu", (long long)(60000000000000ll));
+            test("x", 600000);
+            test("X", 600000);
+            test("o", 600000);
+            test("x", -600000);
+            test("X", -600000);
+            test("o", -600000);
             if(SUPPORT_H_LENGTHS)
             {
                 test("hd", int(0));
