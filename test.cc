@@ -85,13 +85,17 @@ void RunTest(const std::string& formatstr, Params... params)
     int out2 = std::sprintf(  result2, formatstr.c_str(), params...);
     if(out1 != out2 || std::strcmp(result1, result2))
     {
+        #pragma omp critical
+        {
         std::printf("printf(\"%s\"", formatstr.c_str());
         PrintParams(params...);
         std::printf(");\n");
         std::printf("- tiny: %d [%s]\n", out1, result1);
         std::printf("- std:  %d [%s]\n", out2, result2);
         ++tests_failed;
+        }
     }
+    #pragma omp atomic
     ++tests_run;
 }
 extern "C" {
@@ -101,6 +105,7 @@ int _write(int,const unsigned char*,unsigned,unsigned) { return 0; }
 int main()
 {
     RunTest("%%");
+    #pragma omp parallel for collapse(2)
     for(int wid1mode = 0; wid1mode <= 2; ++wid1mode)
     for(int wid2mode = 0; wid2mode <= 2; ++wid2mode)
     for(auto flag: flags)
