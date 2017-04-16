@@ -23,18 +23,20 @@ and replace that function with code that is suitable for your project.
 
 ## Features
 
-* Minimal memory use (there are two arrays for a total of 27 bytes, and a few assorted temporary variables)
-  * Memory use is increased to 68 bytes+misc if binary formats are enabled
+* Memory usage is negligible (around 50-200 bytes of automatic storage used, depending on compiler optimizations and whether binary formats are enabled)
 * The following format types are supported and have the same meaning as in GNU libc printf: `n`, `s`, `c`, `p`, `x`, `X`, `o`, `d`, `u`, and `i`
-  * Format `b` is only enabled if a SUPPORT_BINARY_FORMAT is set
+  * Format `b` (binary integer) is only enabled if a SUPPORT_BINARY_FORMAT is set
 * The following length modifiers are supported and have the same meaning as in GNU libc printf: none, `h`, `hh`, `l`, `ll`, `L`, `j`, `z`, and `t`
   * The length modifier also affects the pointer type in `n` format
-  * It is possible to explicitly disable most of these modifiers if you don’t need them, and want to reduce binary size further
+  * It is possible to explicitly disable most of these modifiers to reduce binary size
 * Min-width, min-precision, max-width, sign, space, justification modifiers are supported and fully standards-compliant (C99 / C++11)
 * Re-entrant code (e.g. it is safe to call `sprintf` within your stream I/O function invoked by `printf`)
+  * Thread-safe as long as your wfunc is thread-safe. `printf` calls are not locked, so prints from different threads can interleave.
 * Compatible with GCC’s optimizations where e.g. `printf("abc\n")` is automatically converted into `puts("abc")`
-* Positional parameters are fully supported (e.g. `printf("%2$s %1$d\n", 5, "test");`), disabled by default
-  * If positional parameters are enabled, dynamically allocated arrays are used to hold parameter information temporarily
+* Positional parameters are fully supported (e.g. `printf("%2$s %1$0*3$ld", 5L, "test", 4);` works and prints “test 0005”), disabled by default
+  * If positional parameters are enabled, two dynamically allocated arrays are used to temporarily hold parameter information. The size of the first array is `sizeof(int) * number-of-printf-parameters` and the size of the second one is the sum of sizes of all the printf parameters excluding the format.
+  * If positional parameters are enabled but not used in the format string, no dynamic allocation occurs, but the format string is still scanned twice.
+* The `n` format can be disabled by changing SUPPORT_N_FORMAT to false
 
 ## Caveats
 
