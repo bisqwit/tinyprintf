@@ -70,31 +70,60 @@ namespace myprintf
     static constexpr unsigned char fmt_autofloat = 0x80;
 
     static constexpr unsigned PatternLength = 8; // number of spaces/zeros in stringconstants
-    static const char stringconstants[] {
-        '-','+',/*' ',*/
-        // eight spaces
-        ' ',' ',' ',' ', ' ',' ',' ',' ',
-        // eight zeros
-        '0','0','0','0', '0','0','0','0',
-        // table of some multichar prefixes (27 letters)
-        /*'0',*/'x','n','a','n','i','n','f',
-        '0',    'X','N','A','N','I','N','F',
-        '(','n','i','l',')', '(','n','u','l','l',')',
-        (0),      (2*32+0), (2*32+8),             // "", 0x, 0X
-        (3*32+2), (3*32+5), (3*32+10), (3*32+13), // nan,inf,NAN,INF
-        char(5*32+16), char(6*32+21),
+
+    template<bool SupportFloats> struct GetStringConstants{};
+    template<> struct GetStringConstants<false>
+    {
+        static inline const char* GetTable()
+        {
+            static const char stringconstants_intonly[] {
+                '-','+',/*' ',*/
+                // eight spaces
+                ' ',' ',' ',' ', ' ',' ',' ',' ',
+                // eight zeros
+                '0','0','0','0', '0','0','0','0',
+                // table of some multichar prefixes (15 letters)
+                /*'0',*/'x',  '0', 'X',
+                '(','n','i','l',')', '(','n','u','l','l',')',
+                (0),      (2*32+0), (2*32+2), // "", 0x, 0X
+                char(5*32+4), char(6*32+9),   // nil,null
+            };
+            return stringconstants_intonly;
+        }
+    };
+    template<> struct GetStringConstants<true>
+    {
+        static inline const char* GetTable()
+        {
+            static const char stringconstants_floats[] {
+                '-','+',/*' ',*/
+                // eight spaces
+                ' ',' ',' ',' ', ' ',' ',' ',' ',
+                // eight zeros
+                '0','0','0','0', '0','0','0','0',
+                // table of some multichar prefixes (27 letters)
+                /*'0',*/'x','n','a','n','i','n','f',
+                '0',    'X','N','A','N','I','N','F',
+                '(','n','i','l',')', '(','n','u','l','l',')',
+                (0),      (2*32+0), (2*32+8),            // "", 0x, 0X
+                char(5*32+16), char(6*32+21),            // nil,null
+                (3*32+2), (3*32+5), (3*32+10), (3*32+13) // nan,inf,NAN,INF
+            };
+            return stringconstants_floats;
+        }
     };
     static constexpr unsigned char prefix_minus = 1;
     static constexpr unsigned char prefix_plus  = 2;
     static constexpr unsigned char prefix_space = 3;
     static constexpr unsigned char prefix_0x    = 4*1;
     static constexpr unsigned char prefix_0X    = 4*2;
-    static constexpr unsigned char prefix_nan   = 4*3;
-    static constexpr unsigned char prefix_inf   = 4*4;
-    static constexpr unsigned char prefix_NAN   = 4*5;
-    static constexpr unsigned char prefix_INF   = 4*6;
-    static constexpr unsigned char prefix_nil   = 4*7;
-    static constexpr unsigned char prefix_null  = 4*8;
+    static constexpr unsigned char prefix_nil   = 4*3;
+    static constexpr unsigned char prefix_null  = 4*4;
+    static constexpr unsigned char prefix_nan   = 4*5;
+    static constexpr unsigned char prefix_inf   = 4*6;
+    static constexpr unsigned char prefix_NAN   = 4*7;
+    static constexpr unsigned char prefix_INF   = 4*8;
+    static constexpr unsigned char prefix_data_length = SUPPORT_FLOAT_FORMATS ? (8+8+5+6) : (4+5+6);
 
     struct prn
     {
@@ -368,7 +397,8 @@ namespace myprintf
              * zeropad is disregarded according to the standard.
              */
             char prefixbuffer[4]; // Longest: +inf
-            unsigned char ctrl = stringconstants[2+PatternLength*2 + 26 + info.prefix_index/4], prefixlen = ctrl/32;
+            const char* stringconstants = GetStringConstants<SUPPORT_FLOAT_FORMATS>::GetTable();
+            unsigned char ctrl = stringconstants[2+PatternLength*2 + prefix_data_length-1 + info.prefix_index/4], prefixlen = ctrl/32;
             const char* prefixsource = &stringconstants[2+PatternLength*2-1 + (ctrl%32)];
             const char* prefix = prefixsource;
             if(info.prefix_index & 3)
@@ -401,7 +431,7 @@ namespace myprintf
             unsigned pad = min_width > combined_length ? (min_width - combined_length) : 0;
 
             // Choose the right mode
-            bool zeropad = (fmt_flags & fmt_zeropad) && (!STRICT_COMPLIANCE || likely(info.prefix_index < prefix_nan)); // Disable zero-padding for (nil), (null)
+            bool zeropad = (fmt_flags & fmt_zeropad) && (!STRICT_COMPLIANCE || likely(info.prefix_index < prefix_nil)); // Disable zero-padding for (nil), (null)
             bool prefix_first = (fmt_flags & fmt_leftalign) || zeropad;
             bool source_last  = !(fmt_flags & fmt_leftalign);
 
