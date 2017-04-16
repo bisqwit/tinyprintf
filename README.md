@@ -57,7 +57,7 @@ and replace that function with code that is suitable for your project.
 Note that any of the following traits may change in future releases.
 
 * The `'` and `I` flag characters are not supported
-* Length modifiers are ignored for `s`, `c` and `p` format types
+* Length modifiers such as `l` or `z` are ignored for `s`, `c` and `p` format types
   * I.e. `wchar_t` strings or `wint_t` chars are not supported.
 * Flags and width modifiers are ignored for the `n` format type
 * Any other format type than `n`, `s`, `c`, `p`, `x`, `X`, `o`, or `b` is treated as if `d` was used
@@ -71,3 +71,9 @@ Note that any of the following traits may change in future releases.
 ## Rationale
 
 * This module was designed for use with mbed-enabled programming, and to remove any dependencies to stdio (specifically FILE stream facilities) in the linkage, reducing the binary size.
+  * And perhaps a tiny bit of “we do what we must, because we can”.
+
+## Author
+
+Copyright © Joel Yliluoma 2017. (http://iki.fi/bisqwit/)    
+Distribution terms: MIT
