@@ -746,6 +746,7 @@ namespace myprintf
                 #undef GET_ARG
             }
         unexpected:;
+            if(!SUPPORT_POSITIONAL_PARAMETERS) break;
             unsigned n_params = max_explicit_param_index;
             if(max_auto_param_index > n_params) n_params = max_auto_param_index;
             switch(round)
@@ -801,7 +802,6 @@ namespace myprintf
                     goto exit_rounds;
                 }
             }
-            if(!SUPPORT_POSITIONAL_PARAMETERS) break;
         }
     exit_rounds:;
         state.flush();
