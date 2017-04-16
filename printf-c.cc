@@ -139,6 +139,7 @@ namespace myprintf
         const char* putend   = nullptr;
 
         char numbuffer[SUPPORT_BINARY_FORMAT ? 64 : 23];
+        char prefixbuffer[SUPPORT_FLOAT_FORMATS ? 4 : 3]; // Longest: +inf or +0x
         unsigned char fmt_flags;
 
         void flush() NOINLINE
@@ -403,7 +404,6 @@ namespace myprintf
              * Note that in case of zeropad+leftalign,
              * zeropad is disregarded according to the standard.
              */
-            char prefixbuffer[SUPPORT_FLOAT_FORMATS ? 4 : 3]; // Longest: +inf
             const char* stringconstants = GetStringConstants<SUPPORT_FLOAT_FORMATS>::GetTable();
             unsigned char ctrl = stringconstants[2+PatternLength*2 + prefix_data_length-1 + info.prefix_index/4];
             unsigned prefixlength = ctrl/32;
@@ -522,6 +522,11 @@ namespace myprintf
         constexpr unsigned MAX_AUTO_PARAMS = 0x8000, MAX_ROUNDS = 4, POS_PARAM_MUL = MAX_AUTO_PARAMS * MAX_ROUNDS;
         unsigned char* param_data_table = nullptr;
 
+        // Figure out the largest parameter size. This is a compile-time constant.
+        constexpr std::size_t largest = std::max(std::max(sizeof(long long), sizeof(void*)),
+                                                 SUPPORT_FLOAT_FORMATS ? std::max(sizeof(double),
+                                                   SUPPORT_LONG_DOUBLE ? sizeof(long double) : sizeof(long))
+                                                                       : sizeof(long));
         // "Round" variable encodes, starting from lsb:
         //     - log2(MAX_AUTO_PARAMS) bits: number of auto params counted so far
         //     - 2 bits:                     round number
@@ -540,7 +545,7 @@ namespace myprintf
                         round = round % POS_PARAM_MUL + which_param_index * POS_PARAM_MUL;
                     --which_param_index;
                 }
-                unsigned* param_offset_table = reinterpret_cast<unsigned *>(param_data_table);
+                unsigned short* param_offset_table = reinterpret_cast<unsigned short *>(param_data_table);
                 switch((round / MAX_AUTO_PARAMS) % MAX_ROUNDS)
                 {
                     case 2:
@@ -548,7 +553,7 @@ namespace myprintf
                         break;
                     case 1:
                         return *(std::remove_reference_t<decltype(type)> const*)
-                                  &param_data_table[param_offset_table[which_param_index]];
+                                  &param_data_table[largest * param_offset_table[which_param_index]];
                 }
                 return type;
             };
@@ -796,6 +801,8 @@ namespace myprintf
             // Do book-keeping after each round. See notes in the beginning of this function.
             unsigned n_params = std::max(round % MAX_AUTO_PARAMS, round / POS_PARAM_MUL);
             unsigned rndno = (round / MAX_AUTO_PARAMS) % MAX_ROUNDS;
+            unsigned paramdata_units  = n_params;
+            unsigned paramsize_units = (n_params * sizeof(unsigned short) + largest-1) / largest;
             switch(rndno)
             {
                 case 3:
@@ -806,27 +813,24 @@ namespace myprintf
                         round = 0;
                         continue;
                     }
-                    // Figure out the largest parameter size
-                    std::size_t largest = std::max(sizeof(long long), sizeof(void*));
-                    if(SUPPORT_FLOAT_FORMATS) largest = std::max(largest, sizeof(double));
-                    if(SUPPORT_FLOAT_FORMATS && SUPPORT_LONG_DOUBLE) largest = std::max(largest, sizeof(long double));
                     // Allocate room for offsets and parameters in one go.
-                    param_data_table = new unsigned char[n_params * (largest + sizeof(unsigned))];
+                    //printf("%u params, sizesize=%u datasize=%u largest=%zu\n", n_params, paramsize_size, paramdata_size, largest);
+                    param_data_table = new unsigned char[largest * (paramsize_units + paramdata_units)];
                     // It is likely we allocated too much (for example if all parameters are ints),
                     // but this way we only need one allocation for the entire duration of the printf.
                     break;
                 }
                 case 2:
                 {
-                    unsigned offset = n_params * sizeof(unsigned);
-                    unsigned* param_offset_table = reinterpret_cast<unsigned *>(param_data_table);
+                    unsigned short* param_offset_table = reinterpret_cast<unsigned short *>(param_data_table);
                     for(unsigned n=0; n<n_params; ++n)
                     {
                         // Convert the size & typecode into an offset
                         unsigned size = param_offset_table[n]/8, typecode = param_offset_table[n]%8;
+                        unsigned offset = n + paramsize_units;
                         param_offset_table[n] = offset;
                         // Load the parameter and store it
-                        unsigned char* tgt = &param_data_table[offset];
+                        unsigned char* tgt = &param_data_table[largest * offset];
                         switch(typecode)
                         {
                             default:{ type0:; int v = va_arg(ap,int);     std::memcpy(tgt,&v,sizeof(v)); } break;
@@ -838,7 +842,6 @@ namespace myprintf
                             case 5: if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_LONG_DOUBLE) goto type0;
                                     { long double v = va_arg(ap,long double); std::memcpy(tgt,&v,sizeof(v)); } break;
                         }
-                        offset += size;
                     }
                     break;
                 }
