@@ -23,8 +23,8 @@ and replace that function with code that is suitable for your project.
 
 ## Features
 
-* Minimal memory use (there are two arrays for a total of 22 bytes, and a few assorted temporary variables)
-  * Memory use is increased to 64 bytes+misc if binary formats are enabled
+* Minimal memory use (there are two arrays for a total of 27 bytes, and a few assorted temporary variables)
+  * Memory use is increased to 68 bytes+misc if binary formats are enabled
 * The following format types are supported and have the same meaning as in GNU libc printf: `n`, `s`, `c`, `p`, `x`, `X`, `o`, `d`, `u`, and `i`
   * Format `b` is only enabled if a SUPPORT_BINARY_FORMAT is set
 * The following length modifiers are supported and have the same meaning as in GNU libc printf: none, `h`, `hh`, `l`, `ll`, `L`, `j`, `z`, and `t`

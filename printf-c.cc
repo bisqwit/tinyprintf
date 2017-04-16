@@ -105,7 +105,7 @@ namespace myprintf
         const char* putbegin = nullptr;
         const char* putend   = nullptr;
 
-        char numbuffer[SUPPORT_BINARY_FORMAT ? 64 : 22];
+        char numbuffer[SUPPORT_BINARY_FORMAT ? 64 : 23];
         unsigned char fmt_flags;
 
         void flush() NOINLINE
@@ -178,8 +178,8 @@ namespace myprintf
 
         widthinfo format_integer(intfmt_t value, unsigned char base, unsigned precision)
         {
-            // Maximum length is ceil(log8(2^64)) = ceil(64/3) = 22 characters
-            static_assert(sizeof(numbuffer) >= (SUPPORT_BINARY_FORMAT ? 64 : 22), "Too small numbuffer");
+            // Maximum length is ceil(log8(2^64)) = ceil(64/3+1) = 23 characters (+1 for octal leading zero)
+            static_assert(sizeof(numbuffer) >= (SUPPORT_BINARY_FORMAT ? 64 : 23), "Too small numbuffer");
 
             if(unlikely((fmt_flags & fmt_pointer) && !value)) // (nil) and %p
             {
