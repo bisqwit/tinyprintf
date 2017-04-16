@@ -80,18 +80,17 @@ namespace myprintf
         /*'0',*/'x','n','a','n','i','n','f',
         '0',    'X','N','A','N','I','N','F',
         '(','n','i','l',')', '(','n','u','l','l',')',
-        (0),                            // none
-        (2*32+0), (3*32+2),  (3*32+5),  // 0x,nan,inf
-        (2*32+8), (3*32+10), (3*32+13), // 0X,NAN,INF
+        (0),      (2*32+0), (2*32+8),             // "", 0x, 0X
+        (3*32+2), (3*32+5), (3*32+10), (3*32+13), // nan,inf,NAN,INF
         char(5*32+16), char(6*32+21),
     };
     static constexpr unsigned char prefix_minus = 1;
     static constexpr unsigned char prefix_plus  = 2;
     static constexpr unsigned char prefix_space = 3;
     static constexpr unsigned char prefix_0x    = 4*1;
-    static constexpr unsigned char prefix_nan   = 4*2;
-    static constexpr unsigned char prefix_inf   = 4*3;
-    static constexpr unsigned char prefix_0X    = 4*4;
+    static constexpr unsigned char prefix_0X    = 4*2;
+    static constexpr unsigned char prefix_nan   = 4*3;
+    static constexpr unsigned char prefix_inf   = 4*4;
     static constexpr unsigned char prefix_NAN   = 4*5;
     static constexpr unsigned char prefix_INF   = 4*6;
     static constexpr unsigned char prefix_nil   = 4*7;
@@ -402,7 +401,7 @@ namespace myprintf
             unsigned pad = min_width > combined_length ? (min_width - combined_length) : 0;
 
             // Choose the right mode
-            bool zeropad = (fmt_flags & fmt_zeropad) && (!STRICT_COMPLIANCE || likely(info.prefix_index < prefix_nil)); // Disable zero-padding for (nil), (null)
+            bool zeropad = (fmt_flags & fmt_zeropad) && (!STRICT_COMPLIANCE || likely(info.prefix_index < prefix_nan)); // Disable zero-padding for (nil), (null)
             bool prefix_first = (fmt_flags & fmt_leftalign) || zeropad;
             bool source_last  = !(fmt_flags & fmt_leftalign);
 
