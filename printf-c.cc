@@ -7,6 +7,8 @@
 #include <memory>
 #include <cmath>
 
+#define SUPPORT_ASPRINTF
+
 static constexpr bool SUPPORT_BINARY_FORMAT = false;// Whether to support %b format type
 static constexpr bool STRICT_COMPLIANCE     = true;
 static constexpr bool SUPPORT_N_FORMAT      = true; // Whether to support %n format type
@@ -969,6 +971,32 @@ extern "C" {
         va_end(ap);
         return ret;
     }
+
+#ifdef SUPPORT_ASPRINTF
+    static void donothing(char*,const char*,std::size_t){}
+
+    int __wrap_vasprintf(char** target, const char* fmt, va_list ap1) USED_FUNC;
+    int __wrap_vasprintf(char** target, const char* fmt, va_list ap1)
+    {
+        std::va_list ap2;
+        va_copy(ap2, ap1);
+        int ret = myprintf::myvprintf(fmt, ap2, nullptr, donothing);
+        va_end(ap2);
+        *target = (char *) std::malloc(ret + 1);
+        ret = __wrap_vsprintf(*target, fmt, ap1);
+        return ret;
+    }
+
+    int __wrap_asprintf(char** target, const char* fmt, ...) USED_FUNC;
+    int __wrap_asprintf(char** target, const char* fmt, ...)
+    {
+        std::va_list ap;
+        va_start(ap, fmt);
+        int ret = __wrap_vasprintf(target, fmt, ap);
+        va_end(ap);
+        return ret;
+    }
+#endif
 
     //int __wrap_fflush(std::FILE*) USED_FUNC;
     int __wrap_fflush(std::FILE*)

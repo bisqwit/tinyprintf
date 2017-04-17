@@ -3,14 +3,15 @@
 `printf-c.cc` is a C++ module that replaces certain C-language libc functions
 with a tiny alternatives suitable for embedded programs.
 
-The functions replaced are `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `vsprintf`, `fiprintf`, `puts`, `fputs`, `putchar`, `fflush`, and `fwrite`.
+The functions replaced are `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `vsprintf`, `asprintf`, `vasprintf`, `fiprintf`, `puts`, `fputs`, `putchar`, `fflush`, and `fwrite`.
 
 To use, compile `printf-c.cc` using your C++ compiler, and link it into your project.
 You will have to add the following linker flags:
 
-    -Wl,--wrap,printf  -Wl,--wrap,fprintf  -Wl,--wrap,sprintf  -Wl,--wrap,fiprintf    
-    -Wl,--wrap,vprintf -Wl,--wrap,vfprintf -Wl,--wrap,vsprintf -Wl,--wrap,fflush    
+    -Wl,--wrap,printf  -Wl,--wrap,fprintf  -Wl,--wrap,sprintf  -Wl,--wrap,asprintf    
+    -Wl,--wrap,vprintf -Wl,--wrap,vfprintf -Wl,--wrap,vsprintf -Wl,--wrap,vasprintf    
     -Wl,--wrap,puts    -Wl,--wrap,putchar  -Wl,--wrap,fputs    -Wl,--wrap,fwrite    
+    -Wl,--wrap,fflush  -Wl,--wrap,fiprintf 
 
 GNU build tools are probably required.
 
@@ -80,7 +81,7 @@ Where
 * No buffering; all text is printed as soon as available, resulting in multiple calls of the I/O function (but as many bytes are printed with a single call as possible)
 * No file I/O: printing is only supported into a predefined output (such as through serial port), or into a string. Any `FILE*` pointer parameters are completely ignored
 * String data is never copied. Any pointers into strings are expected to be valid throughout the call to the printing function
-* `snprintf`, `vsnprintf`, `dprintf`, `vdprintf`, `asprintf`, and `vasprintf` are not included yet
+* `snprintf`, `vsnprintf`, `dprintf`, `vdprintf` are not included yet
   * Neither are `wprintf`, `fwprintf`, `swprintf`, `vwprintf`, `vfwprintf`, `vswprintf` etc.
 * Behavior differs to GNU libc printf when a nul pointer is printed with `p` or `s` formats and max-width specifier is used
 * If positional parameters are enabled, there may be a maximum of 32767 parameters to printf.
