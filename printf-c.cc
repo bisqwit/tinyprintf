@@ -972,6 +972,34 @@ extern "C" {
         return ret;
     }
 
+    static thread_local char* snprintf_cap = nullptr;
+    static void memcpy_cap(char* target, const char* source, std::size_t count)
+    {
+        if(target < snprintf_cap)
+            std::memcpy(target, source, std::min(count, std::size_t(snprintf_cap-target)));
+    }
+
+    int __wrap_vsnprintf(char* target, std::size_t limit, const char* fmt, std::va_list ap) USED_FUNC;
+    int __wrap_vsnprintf(char* target, std::size_t limit, const char* fmt, std::va_list ap)
+    {
+        auto oldcap = snprintf_cap; // Backup the global variable to satisfy re-entrancy
+        snprintf_cap = target + limit;
+        int ret = myprintf::myvprintf(fmt, ap, target, memcpy_cap);
+        snprintf_cap = oldcap;      // Restore backup
+        if(limit) target[std::min(limit-1, std::size_t(ret))] = '\0';
+        return ret;
+    }
+
+    int __wrap_snprintf(char* target, std::size_t limit, const char* fmt, ...) USED_FUNC;
+    int __wrap_snprintf(char* target, std::size_t limit, const char* fmt, ...)
+    {
+        std::va_list ap;
+        va_start(ap, fmt);
+        int ret = __wrap_vsnprintf(target, limit, fmt, ap);
+        va_end(ap);
+        return ret;
+    }
+
 #ifdef SUPPORT_ASPRINTF
     static void donothing(char*,const char*,std::size_t){}
 

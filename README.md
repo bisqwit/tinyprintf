@@ -3,7 +3,7 @@
 `printf-c.cc` is a C++ module that replaces certain C-language libc functions
 with a tiny alternatives suitable for embedded programs.
 
-The functions replaced are `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `vsprintf`, `asprintf`, `vasprintf`, `fiprintf`, `puts`, `fputs`, `putchar`, `fflush`, and `fwrite`.
+The functions replaced are `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `vsprintf`, `snprintf`, `vsnprintf`, `asprintf`, `vasprintf`, `fiprintf`, `puts`, `fputs`, `putchar`, `fflush`, and `fwrite`.
 
 To use, compile `printf-c.cc` using your C++ compiler, and link it into your project.
 You will have to add the following linker flags:
@@ -11,7 +11,7 @@ You will have to add the following linker flags:
     -Wl,--wrap,printf  -Wl,--wrap,fprintf  -Wl,--wrap,sprintf  -Wl,--wrap,asprintf    
     -Wl,--wrap,vprintf -Wl,--wrap,vfprintf -Wl,--wrap,vsprintf -Wl,--wrap,vasprintf    
     -Wl,--wrap,puts    -Wl,--wrap,putchar  -Wl,--wrap,fputs    -Wl,--wrap,fwrite    
-    -Wl,--wrap,fflush  -Wl,--wrap,fiprintf 
+    -Wl,--wrap,fflush  -Wl,--wrap,fiprintf -Wl,--wrap,snprintf -Wl,--wrap,vsnprintf
 
 GNU build tools are probably required.
 
@@ -68,12 +68,11 @@ Where
 
 * Standards-compliant (C99 / C++11), see above for details
 * Memory usage is negligible (around 30-200 bytes of automatic storage used, depending on compiler optimizations, register pressure and spilling, and whether binary formats are enabled)
+  * If positional parameters are enabled and used, a dynamically allocated array is used to temporarily hold parameter information. The size of the array is directly proportional to the number of printf parameters. Each parameter takes about 10 bytes of memory (assuming the largest supported parameter is 64 bits wide).
 * Re-entrant code (e.g. it is safe to call `sprintf` within your stream I/O function invoked by `printf`)
-  * Thread-safe as long as your wfunc is thread-safe. `printf` calls are not locked, so prints from different threads can interleave.
+* Thread-safe as long as your wfunc is thread-safe. `printf` calls are not locked, so prints from different threads can interleave.
 * Compatible with GCC’s optimizations where e.g. `printf("abc\n")` is automatically converted into `puts("abc")`
 * Positional parameters are fully supported (e.g. `printf("%2$s %1$0*3$ld", 5L, "test", 4);` works and prints “test 0005”), disabled by default
-  * If positional parameters are enabled and used, a dynamically allocated array is used to temporarily hold parameter information. The size of the array is directly proportional to the number of printf parameters. Each parameter takes about 10 bytes of memory (assuming the largest supported parameter is 64 bits wide).
-  * If positional parameters are enabled but not used in the format string, no dynamic allocation occurs, but the format string is still scanned twice.
 
 ## Caveats
 
@@ -81,10 +80,12 @@ Where
 * No buffering; all text is printed as soon as available, resulting in multiple calls of the I/O function (but as many bytes are printed with a single call as possible)
 * No file I/O: printing is only supported into a predefined output (such as through serial port), or into a string. Any `FILE*` pointer parameters are completely ignored
 * String data is never copied. Any pointers into strings are expected to be valid throughout the call to the printing function
-* `snprintf`, `vsnprintf`, `dprintf`, `vdprintf` are not included yet
-  * Neither are `wprintf`, `fwprintf`, `swprintf`, `vwprintf`, `vfwprintf`, `vswprintf` etc.
+* `dprintf`, `vdprintf` are not supported (POSIX.1-2008)
+* `wprintf`, `fwprintf`, `swprintf`, `vwprintf`, `vfwprintf`, and `vswprintf` are not supported (C99, C++98)
 * Behavior differs to GNU libc printf when a nul pointer is printed with `p` or `s` formats and max-width specifier is used
 * If positional parameters are enabled, there may be a maximum of 32767 parameters to printf.
+* `vsnprintf` and `snprintf` are thread-safe only if your compiler honors the `thread_local` attribute.
+* If positional parameters are enabled, the format string can be scanned up to three times. If positional parameters are enabled but not used in the format string, no dynamic allocation occurs, but the format string is still scanned twice.
 
 ## Known bugs
 

@@ -94,6 +94,30 @@ void RunTest(const std::string& formatstr, Params... params)
         std::printf("- std:  %d [%s]\n", out2, result2);
         ++tests_failed;
         }
+        #pragma omp atomic
+        ++tests_run;
+        return;
+    }
+
+    #pragma omp atomic
+    ++tests_run;
+
+    result1[0]='X'; result1[1]='\0';
+    result2[0]='X'; result2[1]='\0';
+    int limit = out2/2;
+    int out3 = __wrap_snprintf(result1, limit, formatstr.c_str(), params...);
+    int out4 = std::snprintf(  result2, limit, formatstr.c_str(), params...);
+    if(out3 != out4 || std::strcmp(result1, result2))
+    {
+        #pragma omp critical
+        {
+        std::printf("snrintf(..., %d, \"%s\"", limit, formatstr.c_str());
+        PrintParams(params...);
+        std::printf(");\n");
+        std::printf("- tiny: %d [%s]\n", out3, result1);
+        std::printf("- std:  %d [%s]\n", out4, result2);
+        ++tests_failed;
+        }
     }
     #pragma omp atomic
     ++tests_run;
