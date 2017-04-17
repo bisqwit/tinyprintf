@@ -170,13 +170,6 @@ int main()
                     //        Libc prints "(null)", we print "(nu"
                     return;
                 }
-                /*if(zero_pad && wid1 && wid2)
-                {
-                    // libc has a bug in this, testing against libc is meaningless
-                    // E.g. printf("%03.1d", 3)
-                    //        Libc prints "  3", we print "003"
-                    return;
-                }*/
                 if((format_char=='e' || format_char=='f' || format_char=='g' || format_char=='a'
                  || format_char=='E' || format_char=='F' || format_char=='G' || format_char=='A') && wid2>=16)
                 {

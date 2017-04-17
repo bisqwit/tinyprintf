@@ -274,7 +274,7 @@ namespace myprintf
             {
                 min_width = precision; // 0 is permitted
                 // This setting clears out zeropadding according to standard
-                if(STRICT_COMPLIANCE) { fmt_flags &= ~fmt_zeropad; }
+                if_constexpr(STRICT_COMPLIANCE) { fmt_flags &= ~fmt_zeropad; }
             }
 
             // Range check

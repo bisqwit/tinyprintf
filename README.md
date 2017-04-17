@@ -65,12 +65,13 @@ Where
   * The maximum precision-specifier applied to non-numeric conversions (cutting width) is 134217727 characters (2²⁷−1)
   * The maximum precision-specifier applied to numeric conversions (minimum digits) is 22 digits, or 64 if SUPPORT_BINARY_FORMAT is set
   * Width/precision specifiers are ignored for the `"n"` format type
+  * If STRICT_COMPLIANCE is set, precision specifier is ignored for `"c"` format type.
 * `flag` is zero or more of these letters, in any order: `"+" | "-" | "0" | "#" | " "`
   * `"+"` specifies that a plus sign should be printed in front of a non-negative number. Only affects decimal non-unsigned numeric formats.
   * `" "` specifies that a space should be printed in front of a non-negative number. Only affects decimal non-unsigned numeric formats. Ignored if `"+"` also given.
   * `"-"` specifies that when padding to satisfy the minimum-width-specifier, the value should be left-aligned, not right-aligned.
-  * `"0"` specifies that when padding to satisfy the minimum-width-specifier, the value should be padded with zeroes, not spaces. Ignored if `"-"` also given, or if a precision-specifier is used, or if printing non-numeric data.
-  * "`#"` specifies that "0x" or "0X" should be printed in front of non-zero hexadecimal numbers, and that an octal number must always begin with zero, even if precision of 0 is explicitly specified.
+  * `"0"` specifies that when padding to satisfy the minimum-width-specifier, the value should be padded with zeroes, not spaces. Ignored if `"-"` also given, or if a precision-specifier is used and STRICT_COMPLIANCE is set. Behavior is undefined if applied to non-numeric formats.
+  * "`#"` specifies that "0x" or "0X" should be printed in front of non-zero hexadecimal numbers, and that an octal number must always begin with zero, even if precision of 0 is explicitly specified. Ignored if STRICT_COMPLIANCE is unset.
   * `"'"` flag, defined by SUSv2, is not supported
   * `"I"` flag, defined by glibc, is not supported
   * Flags are ignored for the `"n"` format type.
