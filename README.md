@@ -92,7 +92,6 @@ Where
   * A null pointer passed to `"s"` format is printed as “`(null)`” (note that contrary to glibc, this string may be cut by precision-specifier)
   * Format types `"S"` and `"C"`, defined by SUSv2, are not supported
   * Format type `"m"`, defined by glibc, is not supported
-  * Any other or unsupported symbol is treated as if `"d"` was used
 
 ## Features
 
