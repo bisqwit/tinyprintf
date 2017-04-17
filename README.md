@@ -3,15 +3,16 @@
 `printf-c.cc` is a C++ module that replaces certain C-language libc functions
 with a tiny alternatives suitable for embedded programs.
 
-The functions replaced are `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `vsprintf`, `snprintf`, `vsnprintf`, `asprintf`, `vasprintf`, `fiprintf`, `puts`, `fputs`, `putchar`, `fflush`, and `fwrite`.
+The functions replaced are `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `vsprintf`, `snprintf`, `vsnprintf`, `asprintf`, `vasprintf`, `fiprintf`, `puts`, `fputs`, `putchar`, `fputc`, `fflush`, and `fwrite`.
 
 To use, compile `printf-c.cc` using your C++ compiler, and link it into your project.
 You will have to add the following linker flags:
 
-    -Wl,--wrap,printf  -Wl,--wrap,fprintf  -Wl,--wrap,sprintf  -Wl,--wrap,asprintf    
-    -Wl,--wrap,vprintf -Wl,--wrap,vfprintf -Wl,--wrap,vsprintf -Wl,--wrap,vasprintf    
-    -Wl,--wrap,puts    -Wl,--wrap,putchar  -Wl,--wrap,fputs    -Wl,--wrap,fwrite    
-    -Wl,--wrap,fflush  -Wl,--wrap,fiprintf -Wl,--wrap,snprintf -Wl,--wrap,vsnprintf
+    -Wl,--wrap,printf  -Wl,--wrap,fprintf  -Wl,--wrap,sprintf   -Wl,--wrap,asprintf    
+    -Wl,--wrap,vprintf -Wl,--wrap,vfprintf -Wl,--wrap,vsprintf  -Wl,--wrap,vasprintf    
+    -Wl,--wrap,puts    -Wl,--wrap,putchar  -Wl,--wrap,snprintf  -Wl,--wrap,fwrite    
+    -Wl,--wrap,fputs   -Wl,--wrap,fputc    -Wl,--wrap,vsnprintf -Wl,--wrap,fflush    
+    -Wl,--wrap,fiprintf
 
 GNU build tools are probably required.
 

@@ -7,7 +7,10 @@
 #include <memory>
 #include <cmath>
 
-#define SUPPORT_ASPRINTF
+//#define SUPPORT_ASPRINTF
+//#define SUPPORT_SNPRINTF
+//#define SUPPORT_FIPRINTF
+#define SUPPORT_FILE_FUNCTIONS
 
 static constexpr bool SUPPORT_BINARY_FORMAT = false;// Whether to support %b format type
 static constexpr bool STRICT_COMPLIANCE     = true;
@@ -916,20 +919,11 @@ extern "C" {
         return myprintf::myvprintf(fmt, ap, nullptr, wfunc);
     }
 
+#ifdef SUPPORT_FILE_FUNCTIONS
     int __wrap_vfprintf(std::FILE*, const char* fmt, std::va_list ap) USED_FUNC;
     int __wrap_vfprintf(std::FILE*, const char* fmt, std::va_list ap)
     {
         return myprintf::myvprintf(fmt, ap, nullptr, wfunc);
-    }
-
-    //int __wrap_fiprintf(std::FILE*, const char* fmt, ...) USED_FUNC;
-    int __wrap_fiprintf(std::FILE*, const char* fmt, ...)
-    {
-        std::va_list ap;
-        va_start(ap, fmt);
-        int ret = myprintf::myvprintf(fmt, ap, nullptr, wfunc);
-        va_end(ap);
-        return ret;
     }
 
     int __wrap_fprintf(std::FILE*, const char* fmt, ...) USED_FUNC;
@@ -942,22 +936,25 @@ extern "C" {
         return ret;
     }
 
-    /*static void mfunc(char* target, const char* src, std::size_t n)
+  #ifdef SUPPORT_FIPRINTF
+    //int __wrap_fiprintf(std::FILE*, const char* fmt, ...) USED_FUNC;
+    int __wrap_fiprintf(std::FILE*, const char* fmt, ...)
     {
-        //std::printf("mfunc(%p,%p,%zu)\n", target,src,n);
-        //for(std::size_t a=0; a<n; ++a) target[a] = src[a];
-        std::memcpy(target, src, n);
-    }*/
+        std::va_list ap;
+        va_start(ap, fmt);
+        int ret = myprintf::myvprintf(fmt, ap, nullptr, wfunc);
+        va_end(ap);
+        return ret;
+    }
+  #endif
+#endif
 
     int __wrap_vsprintf(char* target, const char* fmt, std::va_list ap) USED_FUNC;
     int __wrap_vsprintf(char* target, const char* fmt, std::va_list ap)
     {
         typedef void (*afunc)(char*,const char*,std::size_t);
 
-        //int ret = myprintf::myvprintf(fmt, ap, target, mfunc);
         int ret = myprintf::myvprintf(fmt, ap, target, (afunc)std::memcpy);
-
-        //std::printf("target = %d = <%.*s>\n", ret, ret, target);
         target[ret] = '\0';
         return ret;
     }
@@ -972,6 +969,7 @@ extern "C" {
         return ret;
     }
 
+#ifdef SUPPORT_SNPRINTF
     static thread_local char* snprintf_cap = nullptr;
     static void memcpy_cap(char* target, const char* source, std::size_t count)
     {
@@ -999,11 +997,12 @@ extern "C" {
         va_end(ap);
         return ret;
     }
+#endif
 
 #ifdef SUPPORT_ASPRINTF
     static void donothing(char*,const char*,std::size_t){}
 
-    int __wrap_vasprintf(char** target, const char* fmt, va_list ap1) USED_FUNC;
+    //int __wrap_vasprintf(char** target, const char* fmt, va_list ap1) USED_FUNC;
     int __wrap_vasprintf(char** target, const char* fmt, va_list ap1)
     {
         std::va_list ap2;
@@ -1015,7 +1014,7 @@ extern "C" {
         return ret;
     }
 
-    int __wrap_asprintf(char** target, const char* fmt, ...) USED_FUNC;
+    //int __wrap_asprintf(char** target, const char* fmt, ...) USED_FUNC;
     int __wrap_asprintf(char** target, const char* fmt, ...)
     {
         std::va_list ap;
@@ -1026,16 +1025,17 @@ extern "C" {
     }
 #endif
 
-    //int __wrap_fflush(std::FILE*) USED_FUNC;
-    int __wrap_fflush(std::FILE*)
-    {
-        return 0;
-    }
-
     int __wrap_puts(const char* str) USED_FUNC;
     int __wrap_puts(const char* str)
     {
         return __wrap_printf("%s\r\n", str); // %s\r\n
+    }
+
+#ifdef SUPPORT_FILE_FUNCTIONS
+    //int __wrap_fflush(std::FILE*) USED_FUNC;
+    int __wrap_fflush(std::FILE*)
+    {
+        return 0;
     }
 
     int __wrap_fputs(std::FILE*, const char* str) USED_FUNC;
@@ -1043,6 +1043,23 @@ extern "C" {
     {
         return __wrap_puts(str);
     }
+
+
+    int __wrap_fwrite(void* buffer, std::size_t a, std::size_t b, std::FILE*) USED_FUNC;
+    int __wrap_fwrite(void* buffer, std::size_t a, std::size_t b, std::FILE*)
+    {
+        wfunc(nullptr, (const char*)buffer, a*b);
+        return a*b;
+    }
+
+    //int __wrap_fputc(int c, std::FILE*) USED_FUNC;
+    int __wrap_fputc(int c, std::FILE*)
+    {
+        char ch = c;
+        wfunc(nullptr, &ch, 1);
+        return c;
+    }
+#endif
 
     int __wrap_putchar(int c) USED_FUNC;
     int __wrap_putchar(int c)
@@ -1052,10 +1069,4 @@ extern "C" {
         return c;
     }
 
-    int __wrap_fwrite(void* buffer, std::size_t a, std::size_t b, std::FILE*) USED_FUNC;
-    int __wrap_fwrite(void* buffer, std::size_t a, std::size_t b, std::FILE*)
-    {
-        wfunc(nullptr, (const char*)buffer, a*b);
-        return a*b;
-    }
-}
+}/*extern "C"*/
