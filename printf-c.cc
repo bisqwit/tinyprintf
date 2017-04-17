@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <type_traits>
 #include <algorithm>
+#include <memory>
 #include <cmath>
 
 static constexpr bool SUPPORT_BINARY_FORMAT = false;// Whether to support %b format type
@@ -34,9 +35,11 @@ static constexpr bool SUPPORT_POSITIONAL_PARAMETERS = false;
  #define unlikely(x) (x)
 #endif
 #if __cplusplus >= 201400 && (!defined(__GNUC__) || __GNUC__ >= 7)
-# define PASSTHRU   [[fallthrough]];
+ #define PASSTHRU   [[fallthrough]];
+ #define if_constexpr if constexpr
 #else
  #define PASSTHRU
+ #define if_constexpr if
 #endif
 namespace myprintf
 {
@@ -505,6 +508,10 @@ namespace myprintf
         return 0;
     }
 
+    template<bool DoOperation> struct auto_dealloc_pointer {};
+    template<> struct auto_dealloc_pointer<false> { typedef unsigned char* type; };
+    template<> struct auto_dealloc_pointer<true>  { typedef std::unique_ptr<unsigned char[]> type; };
+
     /* Note: Compilation of this function depends on the compiler's ability to optimize away
      * code that is never reached because of the state of the constexpr bools.
      * E.g. if SUPPORT_POSITIONAL_PARAMETERS = false, much of the code in this function
@@ -533,7 +540,7 @@ namespace myprintf
         //printf("---Interpret %s\n", fmt_begin);
 
         constexpr unsigned MAX_AUTO_PARAMS = 0x8000, MAX_ROUNDS = 4, POS_PARAM_MUL = MAX_AUTO_PARAMS * MAX_ROUNDS;
-        unsigned char* param_data_table = nullptr;
+        auto_dealloc_pointer<SUPPORT_POSITIONAL_PARAMETERS>::type param_data_table{};
 
         // Figure out the largest parameter size. This is a compile-time constant.
         constexpr std::size_t largest = std::max(std::max(sizeof(long long), sizeof(void*)),
@@ -546,7 +553,7 @@ namespace myprintf
         //     - The rest:                   maximum explicit param index found so far
         for(unsigned round = SUPPORT_POSITIONAL_PARAMETERS ? (3*MAX_AUTO_PARAMS) : 0; ; )
         {
-            auto process_param = [&round,param_data_table](unsigned typecode, unsigned which_param_index, auto type)
+            auto process_param = [&round,&param_data_table](unsigned typecode, unsigned which_param_index, auto type)
             {
                 if(which_param_index == 0)
                 {
@@ -558,7 +565,7 @@ namespace myprintf
                         round = round % POS_PARAM_MUL + which_param_index * POS_PARAM_MUL;
                     --which_param_index;
                 }
-                unsigned short* param_offset_table = reinterpret_cast<unsigned short *>(param_data_table);
+                unsigned short* param_offset_table = reinterpret_cast<unsigned short *>(&param_data_table[0]);
                 switch((round / MAX_AUTO_PARAMS) % MAX_ROUNDS)
                 {
                     case 2:
@@ -809,63 +816,65 @@ namespace myprintf
             }
         unexpected:;
             // Format string processing is complete.
-            if(!SUPPORT_POSITIONAL_PARAMETERS) break;
-
-            // Do book-keeping after each round. See notes in the beginning of this function.
-            unsigned n_params = std::max(round % MAX_AUTO_PARAMS, round / POS_PARAM_MUL);
-            unsigned rndno = (round / MAX_AUTO_PARAMS) % MAX_ROUNDS;
-            unsigned paramdata_units  = n_params;
-            unsigned paramsize_units = (n_params * sizeof(unsigned short) + largest-1) / largest;
-            switch(rndno)
+            if_constexpr(!SUPPORT_POSITIONAL_PARAMETERS)
             {
-                case 3:
-                {
-                    if(round/POS_PARAM_MUL == 0)
-                    {
-                        // No positional parameters, jump to round 0
-                        round = 0;
-                        continue;
-                    }
-                    // Allocate room for offsets and parameters in one go.
-                    //printf("%u params, sizesize=%u datasize=%u largest=%zu\n", n_params, paramsize_size, paramdata_size, largest);
-                    param_data_table = new unsigned char[largest * (paramsize_units + paramdata_units)];
-                    // It is likely we allocated too much (for example if all parameters are ints),
-                    // but this way we only need one allocation for the entire duration of the printf.
-                    break;
-                }
-                case 2:
-                {
-                    unsigned short* param_offset_table = reinterpret_cast<unsigned short *>(param_data_table);
-                    for(unsigned n=0; n<n_params; ++n)
-                    {
-                        // Convert the size & typecode into an offset
-                        unsigned /*size = param_offset_table[n]/8,*/ typecode = param_offset_table[n]/*%8*/;
-                        unsigned offset = n + paramsize_units;
-                        param_offset_table[n] = offset;
-                        // Load the parameter and store it
-                        unsigned char* tgt = &param_data_table[largest * offset];
-                        switch(typecode)
-                        {
-                            default:{ type0:; int v = va_arg(ap,int);     std::memcpy(tgt,&v,sizeof(v)); } break;
-                            case 1: { long      v = va_arg(ap,long);      std::memcpy(tgt,&v,sizeof(v)); } break;
-                            case 2: { long long v = va_arg(ap,long long); std::memcpy(tgt,&v,sizeof(v)); } break;
-                            case 3: { void*     v = va_arg(ap,void*);     std::memcpy(tgt,&v,sizeof(v)); } break;
-                            case 4: if(!SUPPORT_FLOAT_FORMATS) goto type0;
-                                    { double      v = va_arg(ap,double);      std::memcpy(tgt,&v,sizeof(v)); } break;
-                            case 5: if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_LONG_DOUBLE) goto type0;
-                                    { long double v = va_arg(ap,long double); std::memcpy(tgt,&v,sizeof(v)); } break;
-                        }
-                    }
-                    break;
-                }
-                case 1:
-                {
-                    delete[] param_data_table;
-                default:
-                    goto exit_rounds;
-                }
+                goto exit_rounds;
             }
-            round = (rndno-1) * MAX_AUTO_PARAMS;
+            else
+            {
+                // Do book-keeping after each round. See notes in the beginning of this function.
+                unsigned n_params = std::max(round % MAX_AUTO_PARAMS, round / POS_PARAM_MUL);
+                unsigned rndno = (round / MAX_AUTO_PARAMS) % MAX_ROUNDS;
+                unsigned paramdata_units  = n_params;
+                unsigned paramsize_units = (n_params * sizeof(unsigned short) + largest-1) / largest;
+                switch(rndno)
+                {
+                    case 3:
+                    {
+                        if(round/POS_PARAM_MUL == 0)
+                        {
+                            // No positional parameters, jump to round 0
+                            round = 0;
+                            continue;
+                        }
+                        // Allocate room for offsets and parameters in one go.
+                        //printf("%u params, sizesize=%u datasize=%u largest=%zu\n", n_params, paramsize_size, paramdata_size, largest);
+                        param_data_table = auto_dealloc_pointer<SUPPORT_POSITIONAL_PARAMETERS>::type(
+                            new unsigned char[largest * (paramsize_units + paramdata_units)]);
+                        // It is likely we allocated too much (for example if all parameters are ints),
+                        // but this way we only need one allocation for the entire duration of the printf.
+                        break;
+                    }
+                    case 2:
+                    {
+                        unsigned short* param_offset_table = reinterpret_cast<unsigned short *>(&param_data_table[0]);
+                        for(unsigned n=0; n<n_params; ++n)
+                        {
+                            // Convert the size & typecode into an offset
+                            unsigned /*size = param_offset_table[n]/8,*/ typecode = param_offset_table[n]/*%8*/;
+                            unsigned offset = n + paramsize_units;
+                            param_offset_table[n] = offset;
+                            // Load the parameter and store it
+                            unsigned char* tgt = &param_data_table[largest * offset];
+                            switch(typecode)
+                            {
+                                default:{ type0:; int v = va_arg(ap,int);     std::memcpy(tgt,&v,sizeof(v)); } break;
+                                case 1: { long      v = va_arg(ap,long);      std::memcpy(tgt,&v,sizeof(v)); } break;
+                                case 2: { long long v = va_arg(ap,long long); std::memcpy(tgt,&v,sizeof(v)); } break;
+                                case 3: { void*     v = va_arg(ap,void*);     std::memcpy(tgt,&v,sizeof(v)); } break;
+                                case 4: if(!SUPPORT_FLOAT_FORMATS) goto type0;
+                                        { double      v = va_arg(ap,double);      std::memcpy(tgt,&v,sizeof(v)); } break;
+                                case 5: if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_LONG_DOUBLE) goto type0;
+                                        { long double v = va_arg(ap,long double); std::memcpy(tgt,&v,sizeof(v)); } break;
+                            }
+                        }
+                        break;
+                    }
+                    default:
+                        goto exit_rounds;
+                }
+                round = (rndno-1) * MAX_AUTO_PARAMS;
+            }
         }
     exit_rounds:;
         state.flush();
