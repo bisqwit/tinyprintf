@@ -3,7 +3,29 @@
 `printf-c.cc` is a C++ module that replaces certain C-language libc functions
 with a tiny alternatives suitable for embedded programs.
 
-The functions replaced are `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `vsprintf`, `snprintf`, `vsnprintf`, `asprintf`, `vasprintf`, `fiprintf`, `puts`, `fputs`, `putchar`, `fputc`, `fflush`, and `fwrite`.
+The functions replaced are
+`printf`,
+`vprintf`,
+`sprintf`,
+`vsprintf`,
+`puts`,
+`putchar`,
+`fprintf`¹,
+`vfprintf`¹,
+`fiprintf`¹ ⁴,
+`fputs`¹,
+`fputc`¹,
+`fflush`¹,
+`fwrite`¹,
+`snprintf`²,
+`vsnprintf`²,
+`asprintf`³, and
+`vasprintf`³,
+
+* ¹) Only if SUPPORT_FILE_FUNCTIONS is #defined
+* ²) Only if SUPPORT_SNPRINTF is #defined
+* ³) Only if SUPPORT_ASPRINTF is #defined
+* ⁴) Only if SUPPORT_FIPRINTF is #defined
 
 To use, compile `printf-c.cc` using your C++ compiler, and link it into your project.
 You will have to add the following linker flags:
@@ -13,6 +35,10 @@ You will have to add the following linker flags:
     -Wl,--wrap,puts    -Wl,--wrap,putchar  -Wl,--wrap,snprintf  -Wl,--wrap,fwrite    
     -Wl,--wrap,fputs   -Wl,--wrap,fputc    -Wl,--wrap,vsnprintf -Wl,--wrap,fflush    
     -Wl,--wrap,fiprintf
+
+What `-Wl,--wrap,somefunc` does it replaces all calls to `somefunc` with calls to `__wrap_somefunc`,
+and all calls to `__real_somefunc` with calls to the original `somefunc`.
+It is handy when you need to replace a library function that is not declared “weak”.
 
 GNU build tools are probably required.
 
@@ -41,7 +67,7 @@ Where
   * Width/precision specifiers are ignored for the `"n"` format type
 * `flag` is zero or more of these letters, in any order: `"+" | "-" | "0" | "#" | " "`
   * `"+"` specifies that a plus sign should be printed in front of a non-negative number. Only affects decimal non-unsigned numeric formats.
-  * `" "` specifies that a space should be printed in front of a non-negative number. Only affects decimal non-unsigned numeric formats. Ignored if `"+"` also given, or when printing non-numeric data.
+  * `" "` specifies that a space should be printed in front of a non-negative number. Only affects decimal non-unsigned numeric formats. Ignored if `"+"` also given.
   * `"-"` specifies that when padding to satisfy the minimum-width-specifier, the value should be left-aligned, not right-aligned.
   * `"0"` specifies that when padding to satisfy the minimum-width-specifier, the value should be padded with zeroes, not spaces. Ignored if `"-"` also given, or if a precision-specifier is used, or if printing non-numeric data.
   * "`#"` specifies that "0x" or "0X" should be printed in front of non-zero hexadecimal numbers, and that an octal number must always begin with zero, even if precision of 0 is explicitly specified.
