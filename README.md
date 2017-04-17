@@ -87,13 +87,14 @@ Where
   * `"e"`, `"E"`, `"f"`, `"F"`, `"g"`, and `"G"` are only supported if SUPPORT_FLOAT_FORMATS is set
   * `"a"` and `"A"` are only supported if SUPPORT_FLOAT_FORMATS and SUPPORT_A_FORMAT are both set
   * `"d"` and `"i"` are equivalent and have the same meaning
-  * `"p"` is treated as `%#x`
-  * A null pointer passed to `"p"` format is printed as "(nil)" (note that contrary to glibc, this string may be cut by precision-specifier)
-  * A null pointer passed to `"s"` format is printed as "(null)" (note that contrary to glibc, this string may be cut by precision-specifier)
+  * `"p"` is treated similarly as `%#x`, except that if STRICT_COMPLIANCE is set, `"+"` and `" "` flags will also be processed (this is what glibc does)
+  * A null pointer passed to `"p"` format is printed as “`(nil)`” (note that contrary to glibc, this string may be cut by precision-specifier)
+  * A null pointer passed to `"s"` format is printed as “`(null)`” (note that contrary to glibc, this string may be cut by precision-specifier)
   * Any other or unsupported symbol is treated as if `"d"` was used
 
 ## Features
 
+* Design is optimized for code size
 * Standards-compliant (C99 / C++11), see above for details
 * Memory usage is negligible (around 30-200 bytes of automatic storage used, depending on compiler optimizations, register pressure and spilling, and whether binary formats are enabled)
   * If positional parameters are enabled and used, a dynamically allocated array is used to temporarily hold parameter information. The size of the array is directly proportional to the number of printf parameters. Each parameter takes about 10 bytes of memory (assuming the largest supported parameter is 64 bits wide).

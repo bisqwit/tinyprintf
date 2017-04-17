@@ -244,6 +244,9 @@ int main()
             test("c", int(228-256));
             test("p", (const void*)nullptr);
             test("p", (const void*)0x12345678);
+            test("p", (const void*)0xE2345678);
+            test("p", (const void*)0x1234567812345678ll);
+            test("p", (const void*)0xE234567812345678ll);
             test("d", int(0));
             test("d", int(3));
             test("d", int(-600000));

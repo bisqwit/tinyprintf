@@ -238,17 +238,18 @@ namespace myprintf
             // because putbegin/putend can still refer to that data at this point
             flush();
 
-            if(unlikely((fmt_flags & fmt_pointer) && !value)) // (nil) and %p
-            {
-                return {0, prefix_nil}; // No other prefix
-            }
-
             unsigned char prefix_index = 0;
-            if(fmt_flags & fmt_signed) // Pointers and signed values
+
+            if(fmt_flags & fmt_pointer)
             {
-                if(value < 0)     { value = -value; prefix_index = prefix_minus; }
-                else if(fmt_flags & fmt_plussign) { prefix_index = prefix_plus;  }
-                else if(fmt_flags & fmt_space)    { prefix_index = prefix_space; }
+                if(unlikely(!value)) return {0, prefix_nil}; // (nil) and %p, no other prefix
+                if_constexpr(STRICT_COMPLIANCE) goto signed_flags;
+            }
+            if(fmt_flags & fmt_signed)
+            {
+                if(value < 0)                   { value = -value; prefix_index = prefix_minus; }
+                else signed_flags: if(fmt_flags & fmt_plussign) { prefix_index = prefix_plus;  }
+                else               if(fmt_flags & fmt_space)    { prefix_index = prefix_space; }
                 // GNU libc printf ignores '+' and ' ' modifiers on unsigned formats, but curiously, not for %p.
                 // Note that '+' overrides ' ' if both are used.
             }
@@ -734,7 +735,8 @@ namespace myprintf
                         }
                         break;
                     }
-                    case 'p': { state.fmt_flags |= fmt_alt | fmt_pointer | fmt_signed; size_base_spec = BASE_MUL*sizeof(void*); } PASSTHRU
+                    case 'p': { state.fmt_flags |= fmt_alt | fmt_pointer;
+                    /**/                                       size_base_spec = BASE_MUL*sizeof(void*); } PASSTHRU
                     case 'x': {                                size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_hex-1);   goto got_int; }
                     case 'X': { state.fmt_flags |= fmt_ucbase; size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_hex-1);   goto got_int; }
                     case 'o': {                                size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_octal-1); goto got_int; }
