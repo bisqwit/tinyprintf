@@ -531,6 +531,8 @@ namespace myprintf
     template<> struct auto_dealloc_pointer<false> { typedef unsigned char* type; };
     template<> struct auto_dealloc_pointer<true>  { typedef std::unique_ptr<unsigned char[]> type; };
 
+    template<unsigned tagv,typename T> struct typetag { typedef T type; static constexpr unsigned tag = tagv; };
+
     /* Note: Compilation of this function depends on the compiler's ability to optimize away
      * code that is never reached because of the state of the constexpr bools.
      * E.g. if SUPPORT_POSITIONAL_PARAMETERS = false, much of the code in this function
@@ -574,7 +576,7 @@ namespace myprintf
         //     - The rest:                   maximum explicit param index found so far
         for(unsigned round = SUPPORT_POSITIONAL_PARAMETERS ? (3*MAX_AUTO_PARAMS) : 0; ; )
         {
-            auto process_param = [&round,&param_data_table](unsigned typecode, unsigned which_param_index, auto type)
+            auto process_param = [&round,table=&param_data_table[0]](unsigned typetag, unsigned which_param_index) -> void*
             {
                 if(which_param_index == 0)
                 {
@@ -586,21 +588,18 @@ namespace myprintf
                         round = round % POS_PARAM_MUL + which_param_index * POS_PARAM_MUL;
                     --which_param_index;
                 }
-                unsigned short* param_offset_table = reinterpret_cast<unsigned short *>(&param_data_table[0]);
+                unsigned short* param_offset_table = reinterpret_cast<unsigned short *>(&table[0]);
                 switch((round / MAX_AUTO_PARAMS) % MAX_ROUNDS)
                 {
                     case 2:
-                        param_offset_table[which_param_index] = typecode;
+                        param_offset_table[which_param_index] = typetag;
                         break;
                     case 1:
-                        return *(std::remove_reference_t<decltype(type)> const*)
-                                  &param_data_table[largest * param_offset_table[which_param_index]];
+                        return &table[largest * param_offset_table[which_param_index]];
                 }
-                return type;
+                return nullptr;
             };
 
-            // Rounds 0 and 1 are action rounds. Rounds 2 and 3 are not (nothing is printed).
-            const bool action_round = !SUPPORT_POSITIONAL_PARAMETERS || !(round & (MAX_AUTO_PARAMS*2));
 
             // Start parsing the format string from beginning
             const char* fmt = fmt_begin;
@@ -608,18 +607,22 @@ namespace myprintf
             {
                 if(likely(*fmt != '%'))
                 {
-                literal:
-                    if(action_round) state.append(fmt, 1);
+                literal:;
+                    // Rounds 0 and 1 are action rounds. Rounds 2 and 3 are not (nothing is printed).
+                    if_constexpr(SUPPORT_POSITIONAL_PARAMETERS) { if(round & (MAX_AUTO_PARAMS*2)) continue; }
+                    state.append(fmt, 1);
                     continue;
                 }
 
-                #define GET_ARG(acquire_type, variable, type_index, which_param_index) \
-                    acquire_type variable = (SUPPORT_POSITIONAL_PARAMETERS && round != 0) \
-                        ? process_param((/*sizeof(acquire_type)*8 + */type_index), which_param_index, decltype(variable){}) \
-                        : (/*std::printf("va_arg(%s)\n", #acquire_type),*/ va_arg(ap, acquire_type))
-
-                // Read possible position-index for the value (it comes before flags / widths)
-                unsigned param_index = 0; if_constexpr(SUPPORT_POSITIONAL_PARAMETERS) param_index = read_param_index(fmt);
+                #define GET_ARG(acquire_type, variable, type_index, which_param_index, ifnot) \
+                    acquire_type variable; \
+                    if(SUPPORT_POSITIONAL_PARAMETERS && round != 0) \
+                    { \
+                        void* p = process_param(type_index, which_param_index); \
+                        if(p) { variable = *(acquire_type const*)p; } \
+                        else  { ifnot; } \
+                    } \
+                    else variable = va_arg(ap, acquire_type);
 
                 // Read format flags
                 constexpr unsigned got_minwidth  = 0x100u;
@@ -629,7 +632,6 @@ namespace myprintf
                 //    bit 8:      flag: min_width has been read
                 //    bits 16-18: numeric base/2-1
                 //    bits 19-31: parameter size/2
-
                 set_sizebase(base_decimal, int);
 
                 // The numeric base is encoded into the same variable as fmt_flags
@@ -640,6 +642,14 @@ namespace myprintf
                 const char* source = numbuffer;
                 unsigned    length = 0;
 
+                unsigned param_index = 0;
+                /*if_constexpr(SUPPORT_POSITIONAL_PARAMETERS)
+                {
+                    // Read possible position-index for the value (it comes before flags / widths)
+                    ++fmt;
+                    param_index = read_param_index(fmt);
+                    goto moreflags;
+                }*/
             moreflags1:
                 ++fmt;
             moreflags:;
@@ -666,6 +676,18 @@ namespace myprintf
                             { precision = value; }
                         goto moreflags;
                     }
+                    case '$':
+                    if_constexpr(SUPPORT_POSITIONAL_PARAMETERS)
+                    // If we encounter a lone '$', assume that we just read min_width and possibly a zeropad
+                    // flag, and convert them into a param_index, because we omitted doing read_param_index
+                    // before the loop for space reasons.
+                    {
+                        param_index = min_width;
+                        min_width   = 0;
+                        fmt_flags   &= ~fmt_zeropad;
+                        goto moreflags1;
+                    } else goto got_int;
+
                     case '.': fmt_flags |= got_minwidth; goto moreflags1;
                     case '*':
                     {
@@ -673,7 +695,7 @@ namespace myprintf
                         ++fmt;
 
                         unsigned opt_index = 0; if_constexpr(SUPPORT_POSITIONAL_PARAMETERS) opt_index = read_param_index(fmt);
-                        GET_ARG(int,v,0, opt_index);
+                        GET_ARG(int,v,0, opt_index, goto moreflags);
                         if(!(fmt_flags & got_minwidth))
                         {
                             min_width = (v < 0) ? -v : v;
@@ -704,8 +726,7 @@ namespace myprintf
                     case 'n':
                     if_constexpr(SUPPORT_N_FORMAT)
                     {
-                        GET_ARG(void*,pointer,3, param_index);
-                        if(!action_round) continue;
+                        GET_ARG(void*,pointer,3, param_index, continue);
 
                         auto value = state.param - param;
                         if(!is_type(int))
@@ -725,8 +746,7 @@ namespace myprintf
                     // String format
                     case 's':
                     {
-                        GET_ARG(void*,pointer,3, param_index);
-                        if(!action_round) continue;
+                        GET_ARG(void*,pointer,3, param_index, continue);
 
                         source = static_cast<const char*>(pointer);
                         if(source)
@@ -742,8 +762,7 @@ namespace myprintf
                     // Character format
                     case 'c':
                     {
-                        GET_ARG(int,c,0, param_index);
-                        if(!action_round) continue;
+                        GET_ARG(int,c,0, param_index, continue);
 
                         numbuffer[0] = static_cast<char>(c);
                         length = 1;
@@ -766,11 +785,11 @@ namespace myprintf
                     {
                         intfmt_t value = 0;
 
-                        if(sizeof(long) != sizeof(long long) && is_type(long long)) { GET_ARG(long long,v,2, param_index); value = v; }
-                        else if(sizeof(int) != sizeof(long) && is_type(long))       { GET_ARG(long,v,1, param_index); value = v; }
+                        if(sizeof(long) != sizeof(long long) && is_type(long long)) { GET_ARG(long long,v,2, param_index, continue); value = v; }
+                        else if(sizeof(int) != sizeof(long) && is_type(long))       { GET_ARG(long,v,1, param_index, continue); value = v; }
                         else
                         {
-                            GET_ARG(int,v,0, param_index);
+                            GET_ARG(int,v,0, param_index, continue);
                             value = v;
                             if(SUPPORT_H_LENGTHS && !is_type(int))
                             {
@@ -778,7 +797,6 @@ namespace myprintf
                                 else /*if(sizeof(int) != sizeof(char) && is_type(char))*/ { value = (signed char)value; }
                             }
                         }
-                        if(!action_round) continue;
 
                         // Strip the sign extension of the value
                         if(!(fmt_flags & fmt_signed) && get_type() < sizeof(uintfmt_t))
@@ -829,19 +847,17 @@ namespace myprintf
                         if(precision == ~0u) precision = 6;
                         if(SUPPORT_LONG_DOUBLE && is_type(long long))
                         {
-                            GET_ARG(long double,value,5, param_index);
-                            if(!action_round) continue;
+                            GET_ARG(long double,value,5, param_index, continue);
                             std::tie(length,fmt_flags) = format_float(numbuffer, value, fmt_flags, precision);
                         }
                         else
                         {
-                            GET_ARG(double,value,4, param_index);
-                            if(!action_round) continue;
+                            GET_ARG(double,value,4, param_index, continue);
                             std::tie(length,fmt_flags) = format_float(numbuffer, value, fmt_flags, precision);
                         }
                         precision = ~0u; // No max-width
                         break;
-                    }else break;
+                    } else break;
                     /* f,F: [-]ddd.ddd
                      *                     Recognize [-]inf and nan (INF/NAN for 'F')
                      *      Precision = Number of decimals after decimal point (assumed 6)
