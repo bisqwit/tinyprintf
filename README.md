@@ -110,6 +110,7 @@ Where
 * String data is never copied. Any pointers into strings are expected to be valid throughout the call to the printing function
 * `dprintf`, `vdprintf` are not supported (POSIX.1-2008)
 * `wprintf`, `fwprintf`, `swprintf`, `vwprintf`, `vfwprintf`, and `vswprintf` are not supported (C99, C++98)
+* `printf_s`, `fprintf_s`, `sprintf_s`, `snprintf_s`, `vprintf_s`, `vfprintf_s`, `vsprintf_s`, `vsnprintf_s`, `wprintf_s`, `fwprintf_s`, `swprintf_s`, `snwprintf_s`, `vwprintf_s`, `vfwprintf_s`, `vswprintf_s`, and `vsnwprintf_s` are not supported (C11).
 * Behavior differs to GNU libc printf when a nul pointer is printed with `p` or `s` formats and max-width specifier is used
 * If positional parameters are enabled, there may be a maximum of 32767 parameters to printf.
 * `vsnprintf` and `snprintf` are thread-safe only if your compiler honors the `thread_local` attribute.
