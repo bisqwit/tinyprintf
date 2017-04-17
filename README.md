@@ -90,6 +90,8 @@ Where
   * `"p"` is treated similarly as `%#x`, except that if STRICT_COMPLIANCE is set, `"+"` and `" "` flags will also be processed (this is what glibc does)
   * A null pointer passed to `"p"` format is printed as “`(nil)`” (note that contrary to glibc, this string may be cut by precision-specifier)
   * A null pointer passed to `"s"` format is printed as “`(null)`” (note that contrary to glibc, this string may be cut by precision-specifier)
+  * Format types `"S"` and `"C"`, defined by SUSv2, are not supported
+  * Format type `"m"`, defined by glibc, is not supported
   * Any other or unsupported symbol is treated as if `"d"` was used
 
 ## Features
