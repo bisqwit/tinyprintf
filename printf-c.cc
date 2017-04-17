@@ -496,7 +496,7 @@ namespace myprintf
         }
     };
 
-    static unsigned read_int(const char*& fmt, unsigned def) NOINLINE;
+    //static unsigned read_int(const char*& fmt, unsigned def) NOINLINE;
     static unsigned read_int(const char*& fmt, unsigned def)
     {
         if(*fmt >= '0' && *fmt <= '9')
@@ -611,80 +611,94 @@ namespace myprintf
                 unsigned param_index = 0; if_constexpr(SUPPORT_POSITIONAL_PARAMETERS) param_index = read_param_index(fmt);
 
                 // Read format flags
-                unsigned char fmt_flags = 0;
+                constexpr unsigned BASE_MUL = 0x10;
+                constexpr unsigned FLAG_MUL = 0x10000;
+                constexpr unsigned got_minwidth  = 0x100u;
+                unsigned fmt_flags = ((base_decimal-1) + BASE_MUL*sizeof(int)) * FLAG_MUL;
+                unsigned min_width = 0, precision = ~0u;
+                // fmt_flags:
+                //    bits 0-7:   state.fmt_flags
+                //    bit 8:      flag: min_width has been read
+                //    bits 16-19:  numeric base-1
+                //    bits 20-31: parameter size
+
+                // The numeric base is encoded into the same variable as fmt_flags
+                // to reduce the number of local variables,
+                // thereby reducing register pressure, stack usage,
+                // spilling etc., resulting in a smaller compiled binary.
+
+                const char* source = state.numbuffer;
+                prn::widthinfo info{0,0};
+
             moreflags:;
                 switch(*fmt)
                 {
+                    case '\0': goto unexpected;
+
                     case '-': fmt_flags |= fmt_leftalign; moreflags1: ++fmt; goto moreflags;
                     case ' ': fmt_flags |= fmt_space;     goto moreflags1;
                     case '+': fmt_flags |= fmt_plussign;  goto moreflags1;
                     case '#': fmt_flags |= fmt_alt;       goto moreflags1;
-                    case '0': fmt_flags |= fmt_zeropad;   goto moreflags1;
-                }
-
-                // Read possible min-width
-                unsigned min_width = 0;
-                if(*fmt == '*')
-                {
-                    ++fmt;
-
-                    unsigned opt_index = 0; if_constexpr(SUPPORT_POSITIONAL_PARAMETERS) opt_index = read_param_index(fmt);
-                    GET_ARG(int,v,0, opt_index);
-
-                    min_width = (v < 0) ? -v : v;
-                    if(v < 0) { fmt_flags |= fmt_leftalign; } // negative value sets left-aligning
-                }
-                else
-                {
-                    min_width = read_int(fmt, min_width);
-                }
-
-                // Read possible precision / max-width
-                unsigned precision = ~0u;
-                if(*fmt == '.')
-                {
-                    if(*++fmt == '*')
+                    case '0': if(likely(!(fmt_flags & got_minwidth)))
+                              { fmt_flags |= fmt_zeropad; goto moreflags1; }
+                              PASSTHRU
+                    case '1': case '2': case '3': case '4': case '5':
+                    case '6': case '7': case '8': case '9':
                     {
+                        // Read min-width or precision
+                        unsigned value = read_int(fmt, 0);
+                        if(!(fmt_flags & got_minwidth))
+                            { min_width = value; }
+                        else
+                            { precision = value; }
+                        goto moreflags;
+                    }
+                    case '.': fmt_flags |= got_minwidth; goto moreflags1;
+                    case '*':
+                    {
+                        // Read indirect min-width or precision
                         ++fmt;
 
                         unsigned opt_index = 0; if_constexpr(SUPPORT_POSITIONAL_PARAMETERS) opt_index = read_param_index(fmt);
                         GET_ARG(int,v,0, opt_index);
-
-                        if(v >= 0) { precision = v; } // negative value is treated as unset
+                        if(!(fmt_flags & got_minwidth))
+                        {
+                            min_width = (v < 0) ? -v : v;
+                            if(v < 0) { fmt_flags |= fmt_leftalign; } // negative value sets left-aligning
+                        }
+                        else
+                        {
+                            if(v >= 0) { precision = v; } // negative value is treated as unset
+                        }
+                        goto moreflags;
                     }
-                    else
-                    {
-                        precision = read_int(fmt, precision);
-                    }
-                }
 
-                // Read possible length modifier.
-                // The numeric base is encoded into the same variable to reduce the number
-                // of local variables, thereby reducing register pressure, stack usage,
-                // spilling etc., resulting in a smaller compiled binary.
-                constexpr unsigned BASE_MUL = 0x10;
-                unsigned size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(int);
-                switch(*fmt)
-                {
+                    #define set_sizebase(base,type) \
+                        (fmt_flags = (fmt_flags % FLAG_MUL) + FLAG_MUL * ((base-1) + BASE_MUL * sizeof(type)))
+                    #define set_base(base) \
+                        (fmt_flags = (fmt_flags & ((FLAG_MUL-1) + unsigned(~0ull * FLAG_MUL*BASE_MUL))) + (FLAG_MUL*(base-1)))
+                    #define get_base() \
+                        ((fmt_flags / FLAG_MUL) % BASE_MUL + 1)
+                    #define get_type() \
+                        (fmt_flags / (FLAG_MUL * BASE_MUL))
+                    #define is_type(type) \
+                        (get_type() == sizeof(type))
+
+                    // Read possible length modifier.
                     case 't': if_constexpr(SUPPORT_T_LENGTH) {
-                              size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(std::ptrdiff_t); ++fmt; } break;
-                    case 'z': size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(std::size_t);    ++fmt; break;
-                    case 'l': size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(long);       if(*++fmt != 'l') break; PASSTHRU
-                    case 'L': size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(long long);      ++fmt; break; // Or 'long double'
+                              set_sizebase(base_decimal, std::ptrdiff_t); goto moreflags1; } else { goto got_int; }
+                    case 'z': set_sizebase(base_decimal, std::size_t);    goto moreflags1;
+                    case 'l': set_sizebase(base_decimal, long);       if(*++fmt != 'l') goto moreflags; PASSTHRU
+                    case 'L': set_sizebase(base_decimal, long long);      goto moreflags1; // Or 'long double'
                     case 'j': if_constexpr(SUPPORT_J_LENGTH) {
-                              size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(std::intmax_t);  ++fmt; } break;
+                              set_sizebase(base_decimal, std::intmax_t);  goto moreflags1; } else { goto got_int; }
                     case 'h': if_constexpr(SUPPORT_H_LENGTHS) {
-                              size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(short);      if(*++fmt != 'h') break; /*PASSTHRU*/
-                              size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(char);           ++fmt; } break;
-                }
+                              set_sizebase(base_decimal, short);      if(*++fmt != 'h') goto moreflags; /*PASSTHRU*/
+                              set_sizebase(base_decimal, char);           goto moreflags1; } else { goto got_int; }
 
-                // Read the format type
-                const char* source = state.numbuffer;
-                prn::widthinfo info{0,0};
-                state.fmt_flags = fmt_flags;
-                switch(*fmt)
-                {
-                    case '\0': goto unexpected;
+                    // Read the format type
+
+                    // %n format
                     case 'n':
                     {
                         if_constexpr(!SUPPORT_N_FORMAT) goto got_int;
@@ -692,22 +706,21 @@ namespace myprintf
                         if(!action_round) continue;
 
                         auto value = state.param - param;
-                        if(unlikely((size_base_spec/BASE_MUL) != sizeof(int)))
+                        if(!is_type(int))
                         {
-                            if(sizeof(int) != sizeof(long)
-                                 && (size_base_spec/BASE_MUL) == sizeof(long))  { *static_cast<long*>(pointer) = value; }
-                            else if(SUPPORT_H_LENGTHS
-                                 && sizeof(int) != sizeof(short)
-                                 && (size_base_spec/BASE_MUL) == sizeof(short)) { *static_cast<short*>(pointer) = value; }
-                            else if(SUPPORT_H_LENGTHS
-                                 && sizeof(int) != sizeof(char)
-                                 && (size_base_spec/BASE_MUL) == sizeof(char))  { *static_cast<signed char*>(pointer) = value; }
+                            if(sizeof(int) != sizeof(long) && is_type(long))  { *static_cast<long*>(pointer) = value; }
+                            else if(SUPPORT_H_LENGTHS && sizeof(int) != sizeof(short)
+                                 && is_type(short))                           { *static_cast<short*>(pointer) = value; }
+                            else if(SUPPORT_H_LENGTHS && sizeof(int) != sizeof(char)
+                                 && is_type(char))                            { *static_cast<signed char*>(pointer) = value; }
                             else /*if(sizeof(long) != sizeof(long long)
-                            && (size_base_spec/BASE_MUL) == sizeof(long long))*/{ *static_cast<long long*>(pointer) = value; }
+                                 && is_type(long long))*/                     { *static_cast<long long*>(pointer) = value; }
                         }
-                        else                                                    { *static_cast<int*>(pointer) = value; }
+                        else                                                  { *static_cast<int*>(pointer) = value; }
                         continue; // Nothing to format
                     }
+
+                    // String format
                     case 's':
                     {
                         GET_ARG(void*,pointer,3, param_index);
@@ -719,9 +732,13 @@ namespace myprintf
                             info.length = std::strlen(source);
                             // Only calculate length on non-null pointers
                         }
+
                         // precision is treated as maximum width
+                        state.fmt_flags = fmt_flags;
                         break;
                     }
+
+                    // Character format
                     case 'c':
                     {
                         GET_ARG(int,c,0, param_index);
@@ -733,79 +750,83 @@ namespace myprintf
                         {
                             precision = ~0u; // No max-width
                         }
+
+                        state.fmt_flags = fmt_flags;
                         break;
                     }
-                    case 'p': { state.fmt_flags |= fmt_alt | fmt_pointer;
-                    /**/                                       size_base_spec = BASE_MUL*sizeof(void*); } PASSTHRU
-                    case 'x': {                                size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_hex-1);   goto got_int; }
-                    case 'X': { state.fmt_flags |= fmt_ucbase; size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_hex-1);   goto got_int; }
-                    case 'o': {                                size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_octal-1); goto got_int; }
-                    case 'b': { if_constexpr(SUPPORT_BINARY_FORMAT) { size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_binary-1); } goto got_int; }
-                    case 'd': /*PASSTHRU*/
-                    case 'i': { state.fmt_flags |= fmt_signed; goto got_int; }
+
+                    // Pointer and integer formats
+                    case 'p': { fmt_flags |= fmt_alt | fmt_pointer; set_sizebase(base_hex, void*); goto got_int; }
+                    case 'x': {                                     set_base(base_hex); goto got_int; }
+                    case 'X': { fmt_flags |= fmt_ucbase;            set_base(base_hex); goto got_int; }
+                    case 'o': {                                     set_base(base_octal); goto got_int; }
+                    case 'b': { if_constexpr(SUPPORT_BINARY_FORMAT) { set_base(base_binary); } goto got_int; }
+                    case 'd': case 'i': { fmt_flags |= fmt_signed; goto got_int; }
                     case 'u': default: got_int:
                     {
                         intfmt_t value = 0;
 
-                        if(sizeof(long) != sizeof(long long)
-                        && (size_base_spec/BASE_MUL) == sizeof(long long))  { GET_ARG(long long,v,2, param_index); value = v; }
-                        else if(sizeof(int) != sizeof(long)
-                             && (size_base_spec/BASE_MUL) == sizeof(long))  { GET_ARG(long,v,1, param_index); value = v; }
+                        if(sizeof(long) != sizeof(long long) && is_type(long long)) { GET_ARG(long long,v,2, param_index); value = v; }
+                        else if(sizeof(int) != sizeof(long) && is_type(long))       { GET_ARG(long,v,1, param_index); value = v; }
                         else
                         {
                             GET_ARG(int,v,0, param_index);
                             value = v;
-                            if(SUPPORT_H_LENGTHS && (size_base_spec/BASE_MUL) != sizeof(int))
+                            if(SUPPORT_H_LENGTHS && !is_type(int))
                             {
-                                if(sizeof(int) != sizeof(short) && (size_base_spec/BASE_MUL) == sizeof(short)) { value = (signed short)value; }
-                                else /*if(sizeof(int) != sizeof(char) && (size_base_spec/BASE_MUL) == sizeof(char))*/ { value = (signed char)value; }
+                                if(sizeof(int) != sizeof(short) && is_type(short))        { value = (signed short)value; }
+                                else /*if(sizeof(int) != sizeof(char) && is_type(char))*/ { value = (signed char)value; }
                             }
                         }
                         if(!action_round) continue;
-                        if(!(state.fmt_flags & fmt_signed) && (size_base_spec/BASE_MUL) < sizeof(uintfmt_t))
+                        if(!(fmt_flags & fmt_signed) && get_type() < sizeof(uintfmt_t))
                         {
-                            value &= ((uintfmt_t(1) << (8*(size_base_spec/BASE_MUL)))-1);
+                            value &= ((uintfmt_t(1) << (8*get_type()))-1);
                         }
 
-                        info = state.format_integer(value, size_base_spec%BASE_MUL+1, precision);
+                        state.fmt_flags = fmt_flags;
+                        info = state.format_integer(value, get_base(), precision);
                         precision = ~0u; // No max-width
                         break;
                     }
 
-                    case 'A': if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
-                    case 'a': if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_hex-1);
+                    case 'A': if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; fmt_flags |= fmt_ucbase; PASSTHRU
+                    case 'a': if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; else {
+                              set_base(base_hex);
                               if(precision == ~0u) { } /* TODO: set enough precision for exact representation */
-                              goto got_fmt_e;
-                    case 'E': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
-                    case 'e': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int;
+                              fmt_flags |= fmt_exponent;
+                              goto got_flt; }
+                    case 'E': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; else { fmt_flags |= fmt_ucbase; } PASSTHRU
+                    case 'e': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; else {
                               // Set up 'e' flags
-                    got_fmt_e:state.fmt_flags |= fmt_exponent; // Mode: Always exponent
-                              goto got_flt;
-                    case 'G': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
-                    case 'g': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int;
+                              fmt_flags |= fmt_exponent; // Mode: Always exponent
+                              goto got_flt; }
+                    case 'G': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; else { fmt_flags |= fmt_ucbase; } PASSTHRU
+                    case 'g': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; else {
                               // Set up 'g' flags
-                              state.fmt_flags |= fmt_autofloat; // Mode: Autodetect
-                              goto got_flt;
-                    case 'F': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
+                              fmt_flags |= fmt_autofloat; // Mode: Autodetect
+                              goto got_flt; }
+                    case 'F': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; else { fmt_flags |= fmt_ucbase; } PASSTHRU
                     case 'f': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; got_flt:;
                     if_constexpr(SUPPORT_FLOAT_FORMATS)
                     {
                         if(precision == ~0u) precision = 6;
-                        if(SUPPORT_LONG_DOUBLE && (size_base_spec/BASE_MUL) == sizeof(long long))
+                        state.fmt_flags = fmt_flags;
+                        if(SUPPORT_LONG_DOUBLE && is_type(long long))
                         {
                             GET_ARG(long double,value,5, param_index);
                             if(!action_round) continue;
-                            info = state.format_float(value, size_base_spec%BASE_MUL+1, precision);
+                            info = state.format_float(value, get_base(), precision);
                         }
                         else
                         {
                             GET_ARG(double,value,4, param_index);
                             if(!action_round) continue;
-                            info = state.format_float(value, size_base_spec%BASE_MUL+1, precision);
+                            info = state.format_float(value, get_base(), precision);
                         }
                         precision = ~0u; // No max-width
                         break;
-                    }
+                    }else break;
                     /* f,F: [-]ddd.ddd
                      *                     Recognize [-]inf and nan (INF/NAN for 'F')
                      *      Precision = Number of decimals after decimal point (assumed 6)
@@ -820,7 +841,20 @@ namespace myprintf
                      * a,A: [-]0xh.hhhhp+d  Exactly one hex-digit before decimal point
                      *                      Number of digits after it = precision.
                      */
+
+
+                    #undef set_sizebase
+                    #undef set_base
+                    #undef get_base
+                    #undef get_type
+                    #undef is_type
                 }
+                #if 0
+                switch(*fmt)
+                {
+                }
+                #endif
+
                 if(action_round) // This condition is redundant, but seems to reduce binary size
                 state.format_string(source, min_width, precision, info);
                 #undef GET_ARG

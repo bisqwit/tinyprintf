@@ -136,6 +136,8 @@ int main()
     RunTest("%s%d", "test",1234);
     RunTest("%s%s", "test","more");
     RunTest("%.2s%.2s", "test","more");
+    RunTest("%4.02d", 3);
+    RunTest("%4.02s", "test");
     #pragma omp parallel for collapse(2)
     for(int wid1mode = 0; wid1mode <= 2; ++wid1mode)
     for(int wid2mode = 0; wid2mode <= 2; ++wid2mode)
