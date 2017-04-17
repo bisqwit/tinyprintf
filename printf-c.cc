@@ -138,8 +138,8 @@ namespace myprintf
         const char* putbegin = nullptr;
         const char* putend   = nullptr;
 
-        char numbuffer[SUPPORT_BINARY_FORMAT ? 64 : 23];
         char prefixbuffer[SUPPORT_FLOAT_FORMATS ? 4 : 3]; // Longest: +inf or +0x
+        char numbuffer[SUPPORT_BINARY_FORMAT ? 64 : 23];
         unsigned char fmt_flags;
 
         void flush() NOINLINE
@@ -148,9 +148,13 @@ namespace myprintf
             {
                 unsigned n = putend-putbegin;
                 //std::printf("Flushes %d from <%.*s> to %p\n", n,n,putbegin, param);
-                put(param, putbegin, n);
+                const char* start = putbegin;
+                char*      pparam = param;
+                // Make sure that the same content will not be printed twice
+                putbegin = start  + n;
+                param    = pparam + n;
+                put(pparam, start, n);
                 //std::printf("As a result, %p has <%.*s>\n", param, n, param);
-                param += n;
             }
         }
         void append(const char* source, unsigned length) NOINLINE
@@ -219,6 +223,10 @@ namespace myprintf
             // Maximum length is ceil(log8(2^64)) = ceil(64/3+1) = 23 characters (+1 for octal leading zero)
             static_assert(sizeof(numbuffer) >= (SUPPORT_BINARY_FORMAT ? 64 : 23), "Too small numbuffer");
 
+            // Run flush() before we overwrite prefixbuffer/numbuffer,
+            // because putbegin/putend can still refer to that data at this point
+            flush();
+
             if(unlikely((fmt_flags & fmt_pointer) && !value)) // (nil) and %p
             {
                 return {0, prefix_nil}; // No other prefix
@@ -271,6 +279,10 @@ namespace myprintf
             if(value < 0)     { value = -value; prefix_index = prefix_minus; }
             else if(fmt_flags & fmt_plussign) { prefix_index = prefix_plus;  }
             else if(fmt_flags & fmt_space)    { prefix_index = prefix_space; }
+
+            // Run flush() before we overwrite prefixbuffer/numbuffer,
+            // because putbegin/putend can still refer to that data at this point
+            flush();
 
             if(!std::isfinite(value))
             {
@@ -411,9 +423,10 @@ namespace myprintf
             const char* prefix = prefixsource;
             if(info.prefix_index & 3)
             {
-                prefixbuffer[0] = stringconstants[(info.prefix_index&3)-1];
-                std::memcpy(prefixbuffer+1, prefixsource, prefixlength++);
-                prefix = prefixbuffer;
+                char* tgt = prefixbuffer + sizeof(prefixbuffer) - prefixlength - 1;
+                prefix = tgt;
+                *tgt = stringconstants[(info.prefix_index&3)-1];
+                std::memcpy(tgt+1, prefixsource, prefixlength++);
             }
 
             // Calculate length of prefix + source
@@ -575,7 +588,7 @@ namespace myprintf
 
                 #define GET_ARG(acquire_type, variable, type_index, which_param_index) \
                     acquire_type variable = (SUPPORT_POSITIONAL_PARAMETERS && round != 0) \
-                        ? process_param((sizeof(acquire_type)*8 + type_index), which_param_index, decltype(variable){}) \
+                        ? process_param((/*sizeof(acquire_type)*8 + */type_index), which_param_index, decltype(variable){}) \
                         : (/*std::printf("va_arg(%s)\n", #acquire_type),*/ va_arg(ap, acquire_type))
 
                 // Read possible position-index for the value (it comes before flags / widths)
@@ -826,7 +839,7 @@ namespace myprintf
                     for(unsigned n=0; n<n_params; ++n)
                     {
                         // Convert the size & typecode into an offset
-                        unsigned size = param_offset_table[n]/8, typecode = param_offset_table[n]%8;
+                        unsigned /*size = param_offset_table[n]/8,*/ typecode = param_offset_table[n]/*%8*/;
                         unsigned offset = n + paramsize_units;
                         param_offset_table[n] = offset;
                         // Load the parameter and store it
