@@ -522,9 +522,7 @@ namespace myprintf
         }
     };
 
-    //unsigned read_int(const char*& fmt, unsigned def) NOINLINE;
-    inline unsigned read_int(const char*& fmt, unsigned def) VERYINLINE;
-    inline unsigned read_int(const char*& fmt, unsigned def)
+    unsigned read_int(const char*& fmt, unsigned def)
     {
         if(*fmt >= '0' && *fmt <= '9')
         {
@@ -534,8 +532,9 @@ namespace myprintf
         }
         return def;
     }
-    unsigned read_param_index(const char*& fmt) NOINLINE;
-    unsigned read_param_index(const char*& fmt)
+
+    inline unsigned read_param_index(const char*& fmt) VERYINLINE;
+    inline unsigned read_param_index(const char*& fmt)
     {
         const char* bkup = fmt;
         unsigned index = read_int(fmt, 0);
@@ -715,6 +714,7 @@ namespace myprintf
                         param_index = min_width;
                         min_width   = 0;
                         fmt_flags   &= ~fmt_zeropad;
+                        //fmt_flags = 0; set_sizebase(base_decimal, int);
                         goto moreflags1;
                     } else goto got_unk;
 
@@ -809,7 +809,7 @@ namespace myprintf
                     case 'x': {                                     set_base(base_hex);   goto got_int; }
                     case 'o': {                                     set_base(base_octal); goto got_int; }
                     case 'b': if_constexpr(!SUPPORT_BINARY_FORMAT) goto got_unk; else { set_base(base_binary); goto got_int; }
-                    case 'd': case 'i':                         { fmt_flags |= fmt_signed; goto got_int; }
+                    case 'd': case 'i': { fmt_flags |= fmt_signed; } PASSTHRU
                     case 'u': got_int:
                     {
                         intfmt_t value = 0;
@@ -940,7 +940,8 @@ namespace myprintf
                     }
                     case 2:
                     {
-                        unsigned short* param_offset_table = reinterpret_cast<unsigned short *>(&param_data_table[0]);
+                        unsigned char* table = &param_data_table[0];
+                        unsigned short* param_offset_table = reinterpret_cast<unsigned short *>(table);
                         for(unsigned n=0; n<n_params; ++n)
                         {
                             // Convert the size & typecode into an offset
@@ -948,17 +949,17 @@ namespace myprintf
                             unsigned offset = n + paramsize_units;
                             param_offset_table[n] = offset;
                             // Load the parameter and store it
-                            unsigned char* tgt = &param_data_table[largest * offset];
+                            unsigned char* tgt = &table[largest * offset];
                             switch(typecode)
                             {
-                                default:{ type0:; int v = va_arg(ap,int);     std::memcpy(tgt,&v,sizeof(v)); } break;
-                                case 1: { long      v = va_arg(ap,long);      std::memcpy(tgt,&v,sizeof(v)); } break;
-                                case 2: { long long v = va_arg(ap,long long); std::memcpy(tgt,&v,sizeof(v)); } break;
-                                case 3: { void*     v = va_arg(ap,void*);     std::memcpy(tgt,&v,sizeof(v)); } break;
+                                default:{ type0:; *(int*)tgt = va_arg(ap,int);     break; }
+                                case 1: { *(long*)tgt      = va_arg(ap,long);      break; }
+                                case 2: { *(long long*)tgt = va_arg(ap,long long); break; }
+                                case 3: { *(void**)tgt     = va_arg(ap,void*);     break; }
                                 case 4: if_constexpr(!SUPPORT_FLOAT_FORMATS) { goto type0; } else
-                                        { double      v = va_arg(ap,double);      std::memcpy(tgt,&v,sizeof(v)); break; }
+                                        { *(double*)tgt    = va_arg(ap,double);    break; }
                                 case 5: if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_LONG_DOUBLE) { goto type0; } else
-                                        { long double v = va_arg(ap,long double); std::memcpy(tgt,&v,sizeof(v)); break; }
+                                        { *(long double*)tgt = va_arg(ap,long double); break; }
                             }
                         }
                         break;
