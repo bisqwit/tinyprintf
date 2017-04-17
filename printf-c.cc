@@ -4,11 +4,12 @@
 #include <cstdint>
 #include <type_traits>
 #include <algorithm>
+#include <utility>
 #include <memory>
 #include <cmath>
 
+#define SUPPORT_SNPRINTF
 //#define SUPPORT_ASPRINTF
-//#define SUPPORT_SNPRINTF
 //#define SUPPORT_FIPRINTF
 #define SUPPORT_FILE_FUNCTIONS
 
@@ -92,7 +93,7 @@ namespace myprintf
     template<bool SupportFloats> struct GetStringConstants{};
     template<> struct GetStringConstants<false>
     {
-        static const char* GetTable() NOINLINE
+        static const char* GetTable() VERYINLINE
         {
             static const char stringconstants_intonly[] {
                 '-','+',/*' ',*/
@@ -111,7 +112,7 @@ namespace myprintf
     };
     template<> struct GetStringConstants<true>
     {
-        static const char* GetTable() NOINLINE
+        static const char* GetTable() VERYINLINE
         {
             static const char stringconstants_floats[] {
                 '-','+',/*' ',*/
@@ -143,6 +144,235 @@ namespace myprintf
     static constexpr unsigned char prefix_INF   = 4*8;
     static constexpr unsigned char prefix_data_length = SUPPORT_FLOAT_FORMATS ? (8+8+5+6) : (2+2+5+6);
 
+    static constexpr unsigned NUMBUFFER_SIZE = SUPPORT_BINARY_FORMAT ? 64 : 23;
+
+    #define BASE_MUL 0x8u
+    #define FLAG_MUL 0x10000u
+    #define PFX_MUL  0x200u
+
+    #define set_sizebase(base,type) \
+        (fmt_flags = (fmt_flags % FLAG_MUL) + FLAG_MUL * ((base/2-1) + BASE_MUL * (sizeof(type)-1)))
+    #define set_size(type) \
+        (fmt_flags = (fmt_flags % (FLAG_MUL * BASE_MUL)) + FLAG_MUL*BASE_MUL * (sizeof(type)-1))
+    #define set_base(base) \
+        (fmt_flags = (fmt_flags & ((FLAG_MUL-1) + unsigned(~0ull * FLAG_MUL*BASE_MUL))) + (FLAG_MUL*(base/2-1)))
+    #define get_base() \
+        ((fmt_flags / FLAG_MUL) % BASE_MUL + 1)*2
+    #define get_type() \
+        (fmt_flags / (FLAG_MUL * BASE_MUL)+1)
+    #define is_type(type) \
+        (fmt_flags / (FLAG_MUL * BASE_MUL) == sizeof(type)-1)
+
+    static inline unsigned clamp(unsigned value, unsigned minvalue, unsigned maxvalue) VERYINLINE;
+    static inline unsigned clamp(unsigned value, unsigned minvalue, unsigned maxvalue)
+    {
+        if(value < minvalue) value = minvalue;
+        if(value > maxvalue) value = maxvalue;
+        return value;
+    }
+    static inline unsigned estimate_uinteger_width(uintfmt_t uvalue, unsigned base) VERYINLINE /*NOINLINE*/;
+    static inline unsigned estimate_uinteger_width(uintfmt_t uvalue, unsigned base)
+    {
+        unsigned width = 0;
+        while(uvalue != 0)
+        {
+            ++width;
+            uvalue /= base;
+        }
+        return width;
+    }
+
+    static void put_uinteger(char* target, uintfmt_t uvalue, unsigned width, unsigned char base, char alphaoffset) /*NOINLINE*/
+    {
+        for(unsigned w=width; w-- > 0; )
+        {
+            unsigned digitvalue = uvalue % base; uvalue /= base;
+            target[w] = digitvalue + (likely(digitvalue < 10) ? '0' : alphaoffset);
+        }
+    }
+    static void put_uint_decimal(char* target, uintfmt_t uvalue, unsigned width) NOINLINE;
+    static void put_uint_decimal(char* target, uintfmt_t uvalue, unsigned width)
+    {
+        put_uinteger(target, uvalue, width, 10, '0');
+    }
+
+    static inline std::pair<unsigned,unsigned> format_integer
+        (char* numbuffer, intfmt_t value, unsigned fmt_flags, unsigned min_digits) VERYINLINE;
+    static inline std::pair<unsigned,unsigned> format_integer
+        (char* numbuffer, intfmt_t value, unsigned fmt_flags, unsigned min_digits)
+    {
+        // Maximum length is ceil(log8(2^64)) = ceil(64/3+1) = 23 characters (+1 for octal leading zero)
+        static_assert(NUMBUFFER_SIZE >= (SUPPORT_BINARY_FORMAT ? 64 : 23), "Too small numbuffer");
+
+        if(fmt_flags & fmt_pointer)
+        {
+            if(unlikely(!value)) { return {0u, fmt_flags + PFX_MUL*prefix_nil}; } // (nil) and %p, no other prefix
+            if_constexpr(STRICT_COMPLIANCE) goto signed_flags;
+        }
+        if(fmt_flags & fmt_signed)
+        {
+            if(value < 0)                   { value = -value; fmt_flags += PFX_MUL*prefix_minus; }
+            else signed_flags: if(fmt_flags & fmt_plussign) { fmt_flags += PFX_MUL*prefix_plus;  }
+            else               if(fmt_flags & fmt_space)    { fmt_flags += PFX_MUL*prefix_space; }
+            // GNU libc printf ignores '+' and ' ' modifiers on unsigned formats, but curiously, not for %p.
+            // Note that '+' overrides ' ' if both are used.
+        }
+
+        unsigned b = get_base();
+        unsigned width = estimate_uinteger_width(value, b);
+        if(STRICT_COMPLIANCE && unlikely(fmt_flags & fmt_alt))
+        {
+            // Bases: 2   /2 = 1  -1 = 0
+            //        8   /2 = 4  -1 = 3
+            //        10  /2 = 5  -1 = 4
+            //        16  /2 = 8  -1 = 7
+            if(b == 16)
+            {
+                // Add 0x/0X prefix
+                if(value != 0) { fmt_flags += PFX_MUL*((fmt_flags & fmt_ucbase) ? prefix_0X : prefix_0x); }
+            }
+            else if(b == 8)
+            {
+                // Make sure there's at least 1 leading '0'
+                if(value != 0 || !width) { width += 1; }
+            }
+        }
+
+        // Range check
+        width = clamp(width, min_digits, NUMBUFFER_SIZE);
+        put_uinteger(numbuffer, value, width, b, ((fmt_flags & fmt_ucbase) ? 'A' : 'a')-10);
+        return {width,fmt_flags};
+    }
+
+    template<typename FloatType>
+    static inline std::pair<unsigned,unsigned> format_float
+        (char* numbuffer, FloatType value, unsigned fmt_flags, unsigned precision)
+    {
+        unsigned char prefix_index = 0;
+        if(value < 0)     { value = -value; prefix_index = prefix_minus; }
+        else if(fmt_flags & fmt_plussign) { prefix_index = prefix_plus;  }
+        else if(fmt_flags & fmt_space)    { prefix_index = prefix_space; }
+
+        if(!std::isfinite(value))
+        {
+            return {0u, fmt_flags + PFX_MUL*(prefix_index + (
+                                std::isinf(value) ? ((fmt_flags & fmt_ucbase) ? prefix_INF : prefix_inf)
+                                                  : ((fmt_flags & fmt_ucbase) ? prefix_NAN : prefix_nan))) };
+        }
+
+        int e_exponent=0;
+
+        if(SUPPORT_A_FORMAT && get_base() == base_hex)
+        {
+            value = std::frexp(value, &e_exponent);
+            while(value > 0 && value*2 < 0x10) { value *= 2; --e_exponent; }
+        }
+        else if(value != FloatType(0))
+        {
+            e_exponent = std::floor(std::log10(value));
+        }
+
+        if(precision == ~0u) precision = 6;
+        if(fmt_flags & fmt_autofloat)
+        {
+            // Mode: Let X = E-style exponent, P = chosen precision.
+            //       If P > X >= -4, choose 'f' and P = P-1-X.
+            //       Else,           choose 'e' and P = P-1.
+            if(!precision) precision = 1;
+            if(int(precision) > e_exponent && e_exponent >= -4) { precision -= e_exponent+1; }
+            else                                                { precision -= 1; fmt_flags |= fmt_exponent; }
+        }
+
+        int head_width = 1;
+
+        /* Round the value into the specified precision */
+        uintfmt_t uvalue = 0;
+        if(value != FloatType(0))
+        {
+            if(!(fmt_flags & fmt_exponent))
+            {
+                head_width = 1 + e_exponent;
+            }
+            unsigned total_precision = precision;
+            /*if(head_width > 0)*/ total_precision += head_width;
+
+            // Create a scaling factor where all desired decimals are in the integer portion
+            FloatType factor = std::pow(FloatType(10), FloatType(total_precision - std::ceil(std::log10(value))));
+            //auto ovalue = value;
+            auto rvalue = std::round(value * factor);
+            uvalue = rvalue;
+            // Scale it back
+            value = rvalue / factor;
+            // Recalculate exponent from rounded value
+            e_exponent = std::floor(std::log10(value));
+            if(!(fmt_flags & fmt_exponent))
+            {
+                head_width = 1 + e_exponent;
+            }
+
+            /*std::printf("Value %.12g rounded to %u decimals: %.12g, %lu  head_width=%d\n",
+                ovalue, total_precision, value, uvalue, head_width);*/
+        }
+
+        unsigned exponent_width = 0;
+        unsigned point_width    = (precision > 0 || (fmt_flags & fmt_alt)) ? 1 : 0;
+        unsigned decimals_width = clamp(precision, 0, sizeof(numbuffer)-exponent_width-point_width-head_width);
+
+        // Count the number of digits
+        uintfmt_t digits = estimate_uinteger_width(uvalue, 10);
+        uintfmt_t scale    = std::pow(FloatType(10), FloatType(int(digits - head_width)));
+        if(!scale) scale=1;
+        uintfmt_t head     = uvalue / scale;
+        uintfmt_t fraction = uvalue % scale;
+        //uintfmt_t scale2   = uintfmt_t(std::pow(FloatType(10), FloatType(-head_width)));
+        //if(head_width < 0 && scale2 != 0) fraction /= scale2;
+
+        /*std::printf("- digits in %lu=%lu, scale=%lu, head=%lu, fraction=%lu\n",
+            uvalue,digits, scale, head,fraction);*/
+
+        if(head_width < 1) head_width = 1;
+
+        if(fmt_flags & fmt_exponent)
+        {
+        /*
+            auto vv = value * std::pow(FloatType(10), FloatType(-e_exponent));
+
+            fraction = std::modf(vv, &head);
+            //if(value != FloatType(0) && head == FloatType(0)) { vv *= 10; fraction = std::modf(vv, &head); --e_exponent; }
+
+            auto uf = fraction;
+            fraction = std::round(fraction * std::pow(FloatType(10), FloatType(int(precision))));
+            std::printf("%.20g -> %.20g split into head=%.20g, fraction=%.20g -> %.20g using exponents %d\n",
+                value,vv,head,uf,fraction,
+                e_exponent);
+        */
+            exponent_width =
+                clamp(estimate_uinteger_width(e_exponent<0 ? -e_exponent : e_exponent, 10),
+                      2,
+                      sizeof(numbuffer)-3-head_width) + 2;
+        }
+        else
+        {
+        }
+
+        put_uint_decimal(numbuffer + 0, head, head_width);
+        unsigned tgt = head_width;
+        if(point_width)
+        {
+            numbuffer[tgt] = '.'; tgt += 1;
+            put_uint_decimal(numbuffer + tgt, fraction, decimals_width);
+            tgt += decimals_width;
+        }
+        if(exponent_width)
+        {
+            numbuffer[tgt++] = ((fmt_flags & fmt_ucbase) ? 'E' : 'e');
+            numbuffer[tgt++] = ((e_exponent < 0)         ? '-' : '+');
+            put_uint_decimal(numbuffer + tgt, e_exponent<0 ? -e_exponent : e_exponent, exponent_width-2);
+            tgt += exponent_width-2;
+        }
+        return {tgt, fmt_flags + PFX_MUL*prefix_index};
+    }
+
     struct prn
     {
         char* param;
@@ -152,7 +382,6 @@ namespace myprintf
         const char* putend   = nullptr;
 
         char prefixbuffer[SUPPORT_FLOAT_FORMATS ? 4 : 3]; // Longest: +inf or +0x
-        char numbuffer[SUPPORT_BINARY_FORMAT ? 64 : 23];
 
         void flush() NOINLINE
         {
@@ -186,253 +415,17 @@ namespace myprintf
         {
             while(count > 0)
             {
-                unsigned n = count;
-                if(n > PatternLength) n = PatternLength;
+                unsigned n = std::min(count, PatternLength);
                 append(from, n);
                 count -= n;
             }
         }
 
-        /* sign_mode: 0 = unsigned, 1 = signed, 2 = pointer */
-        struct widthinfo
+        inline void format_string(const char* source, unsigned sourcelength,
+                                  unsigned min_width, unsigned max_width, unsigned fmt_flags) VERYINLINE
         {
-            std::size_t   length;
-            unsigned char prefix_index;
-        } info;
-
-        static inline unsigned clamp(unsigned value, unsigned minvalue, unsigned maxvalue) VERYINLINE
-        {
-            if(value < minvalue) value = minvalue;
-            if(value > maxvalue) value = maxvalue;
-            return value;
-        }
-        static inline unsigned estimate_uinteger_width(uintfmt_t uvalue, unsigned base) VERYINLINE /*NOINLINE*/
-        {
-            unsigned width = 0;
-            while(uvalue != 0)
-            {
-                ++width;
-                uvalue /= base;
-            }
-            return width;
-        }
-
-        static void put_uinteger(char* target, uintfmt_t uvalue, unsigned width, unsigned char base, char alphaoffset) /*NOINLINE*/
-        {
-            for(unsigned w=width; w-- > 0; )
-            {
-                unsigned digitvalue = uvalue % base; uvalue /= base;
-                target[w] = digitvalue + (likely(digitvalue < 10) ? '0' : alphaoffset);
-            }
-        }
-        static void put_uint_decimal(char* target, uintfmt_t uvalue, unsigned width) NOINLINE
-        {
-            put_uinteger(target, uvalue, width, 10, '0');
-        }
-
-        #define BASE_MUL 0x8u
-        #define FLAG_MUL 0x10000u
-        #define set_sizebase(base,type) \
-            (fmt_flags = (fmt_flags % FLAG_MUL) + FLAG_MUL * ((base/2-1) + BASE_MUL * (sizeof(type)-1)))
-        #define set_size(type) \
-            (fmt_flags = (fmt_flags % (FLAG_MUL * BASE_MUL)) + FLAG_MUL*BASE_MUL * (sizeof(type)-1))
-        #define set_base(base) \
-            (fmt_flags = (fmt_flags & ((FLAG_MUL-1) + unsigned(~0ull * FLAG_MUL*BASE_MUL))) + (FLAG_MUL*(base/2-1)))
-        #define get_base() \
-            ((fmt_flags / FLAG_MUL) % BASE_MUL + 1)*2
-        #define get_type() \
-            (fmt_flags / (FLAG_MUL * BASE_MUL)+1)
-        #define is_type(type) \
-            (fmt_flags / (FLAG_MUL * BASE_MUL) == sizeof(type)-1)
-
-        inline void format_integer(intfmt_t value, unsigned fmt_flags, unsigned min_digits) VERYINLINE
-        {
-            // Maximum length is ceil(log8(2^64)) = ceil(64/3+1) = 23 characters (+1 for octal leading zero)
-            static_assert(sizeof(numbuffer) >= (SUPPORT_BINARY_FORMAT ? 64 : 23), "Too small numbuffer");
-
-            // Run flush() before we overwrite prefixbuffer/numbuffer,
-            // because putbegin/putend can still refer to that data at this point
-            flush();
-
-            unsigned char prefix_index = 0;
-            if(fmt_flags & fmt_pointer)
-            {
-                if(unlikely(!value)) { info.prefix_index = prefix_nil; return; } // (nil) and %p, no other prefix
-                if_constexpr(STRICT_COMPLIANCE) goto signed_flags;
-            }
-            if(fmt_flags & fmt_signed)
-            {
-                if(value < 0)                   { value = -value; prefix_index = prefix_minus; }
-                else signed_flags: if(fmt_flags & fmt_plussign) { prefix_index = prefix_plus;  }
-                else               if(fmt_flags & fmt_space)    { prefix_index = prefix_space; }
-                // GNU libc printf ignores '+' and ' ' modifiers on unsigned formats, but curiously, not for %p.
-                // Note that '+' overrides ' ' if both are used.
-            }
-
-            unsigned b = get_base();
-            unsigned width = estimate_uinteger_width(value, b);
-            if(STRICT_COMPLIANCE && unlikely(fmt_flags & fmt_alt))
-            {
-                // Bases: 2   /2 = 1  -1 = 0
-                //        8   /2 = 4  -1 = 3
-                //        10  /2 = 5  -1 = 4
-                //        16  /2 = 8  -1 = 7
-                if(b == 16)
-                {
-                    // Add 0x/0X prefix
-                    if(value != 0) { prefix_index += (fmt_flags & fmt_ucbase) ? prefix_0X : prefix_0x; }
-                }
-                else if(b == 8)
-                {
-                    // Make sure there's at least 1 leading '0'
-                    if(value != 0 || !width) { width += 1; }
-                }
-            }
-
-            // Range check
-            info.prefix_index = prefix_index;
-            info.length       = clamp(width, min_digits, sizeof(numbuffer));
-            put_uinteger(numbuffer, value, info.length, b, ((fmt_flags & fmt_ucbase) ? 'A' : 'a')-10);
-        }
-
-        template<typename FloatType>
-        inline void format_float(FloatType value, unsigned fmt_flags, unsigned precision)
-        {
-            unsigned char prefix_index = 0;
-            if(value < 0)     { value = -value; prefix_index = prefix_minus; }
-            else if(fmt_flags & fmt_plussign) { prefix_index = prefix_plus;  }
-            else if(fmt_flags & fmt_space)    { prefix_index = prefix_space; }
-
-            // Run flush() before we overwrite prefixbuffer/numbuffer,
-            // because putbegin/putend can still refer to that data at this point
-            flush();
-
-            if(!std::isfinite(value))
-            {
-                info.prefix_index = (unsigned char)(prefix_index + (
-                                    std::isinf(value) ? ((fmt_flags & fmt_ucbase) ? prefix_INF : prefix_inf)
-                                                      : ((fmt_flags & fmt_ucbase) ? prefix_NAN : prefix_nan)));
-                return;
-            }
-
-            int e_exponent=0;
-
-            if(SUPPORT_A_FORMAT && get_base() == base_hex)
-            {
-                value = std::frexp(value, &e_exponent);
-                while(value > 0 && value*2 < 0x10) { value *= 2; --e_exponent; }
-            }
-            else if(value != FloatType(0))
-            {
-                e_exponent = std::floor(std::log10(value));
-            }
-
-            if(precision == ~0u) precision = 6;
-            if(fmt_flags & fmt_autofloat)
-            {
-                // Mode: Let X = E-style exponent, P = chosen precision.
-                //       If P > X >= -4, choose 'f' and P = P-1-X.
-                //       Else,           choose 'e' and P = P-1.
-                if(!precision) precision = 1;
-                if(int(precision) > e_exponent && e_exponent >= -4) { precision -= e_exponent+1; }
-                else                                                { precision -= 1; fmt_flags |= fmt_exponent; }
-            }
-
-            int head_width = 1;
-
-            /* Round the value into the specified precision */
-            uintfmt_t uvalue = 0;
-            if(value != FloatType(0))
-            {
-                if(!(fmt_flags & fmt_exponent))
-                {
-                    head_width = 1 + e_exponent;
-                }
-                unsigned total_precision = precision;
-                /*if(head_width > 0)*/ total_precision += head_width;
-
-                // Create a scaling factor where all desired decimals are in the integer portion
-                FloatType factor = std::pow(FloatType(10), FloatType(total_precision - std::ceil(std::log10(value))));
-                //auto ovalue = value;
-                auto rvalue = std::round(value * factor);
-                uvalue = rvalue;
-                // Scale it back
-                value = rvalue / factor;
-                // Recalculate exponent from rounded value
-                e_exponent = std::floor(std::log10(value));
-                if(!(fmt_flags & fmt_exponent))
-                {
-                    head_width = 1 + e_exponent;
-                }
-
-                /*std::printf("Value %.12g rounded to %u decimals: %.12g, %lu  head_width=%d\n",
-                    ovalue, total_precision, value, uvalue, head_width);*/
-            }
-
-            unsigned exponent_width = 0;
-            unsigned point_width    = (precision > 0 || (fmt_flags & fmt_alt)) ? 1 : 0;
-            unsigned decimals_width = clamp(precision, 0, sizeof(numbuffer)-exponent_width-point_width-head_width);
-
-            // Count the number of digits
-            uintfmt_t digits = estimate_uinteger_width(uvalue, 10);
-            uintfmt_t scale    = std::pow(FloatType(10), FloatType(int(digits - head_width)));
-            if(!scale) scale=1;
-            uintfmt_t head     = uvalue / scale;
-            uintfmt_t fraction = uvalue % scale;
-            //uintfmt_t scale2   = uintfmt_t(std::pow(FloatType(10), FloatType(-head_width)));
-            //if(head_width < 0 && scale2 != 0) fraction /= scale2;
-
-            /*std::printf("- digits in %lu=%lu, scale=%lu, head=%lu, fraction=%lu\n",
-                uvalue,digits, scale, head,fraction);*/
-
-            if(head_width < 1) head_width = 1;
-
-            if(fmt_flags & fmt_exponent)
-            {
-            /*
-                auto vv = value * std::pow(FloatType(10), FloatType(-e_exponent));
-
-                fraction = std::modf(vv, &head);
-                //if(value != FloatType(0) && head == FloatType(0)) { vv *= 10; fraction = std::modf(vv, &head); --e_exponent; }
-
-                auto uf = fraction;
-                fraction = std::round(fraction * std::pow(FloatType(10), FloatType(int(precision))));
-                std::printf("%.20g -> %.20g split into head=%.20g, fraction=%.20g -> %.20g using exponents %d\n",
-                    value,vv,head,uf,fraction,
-                    e_exponent);
-            */
-                exponent_width =
-                    clamp(estimate_uinteger_width(e_exponent<0 ? -e_exponent : e_exponent, 10),
-                          2,
-                          sizeof(numbuffer)-3-head_width) + 2;
-            }
-            else
-            {
-            }
-
-            put_uint_decimal(numbuffer + 0, head, head_width);
-            unsigned tgt = head_width;
-            if(point_width)
-            {
-                numbuffer[tgt] = '.'; tgt += 1;
-                put_uint_decimal(numbuffer + tgt, fraction, decimals_width);
-                tgt += decimals_width;
-            }
-            if(exponent_width)
-            {
-                numbuffer[tgt++] = ((fmt_flags & fmt_ucbase) ? 'E' : 'e');
-                numbuffer[tgt++] = ((e_exponent < 0)         ? '-' : '+');
-                put_uint_decimal(numbuffer + tgt, e_exponent<0 ? -e_exponent : e_exponent, exponent_width-2);
-                tgt += exponent_width-2;
-            }
-            info.length       = tgt;
-            info.prefix_index = prefix_index;
-        }
-
-        inline void format_string(const char* source, unsigned min_width, unsigned max_width, unsigned fmt_flags) VERYINLINE
-        {
-            unsigned char prefix_index = info.prefix_index;
-            if(unlikely(source == nullptr)) { /* info.length = 0; */ prefix_index = prefix_null; }
+            unsigned char prefix_index = (fmt_flags / PFX_MUL) % (FLAG_MUL/PFX_MUL);
+            if(unlikely(source == nullptr)) { /* sourcelength = 0; */ prefix_index = prefix_null; }
             /* There are three possible combinations:
              *
              *    Leftalign      prefix, source, spaces
@@ -449,14 +442,12 @@ namespace myprintf
             const char* prefix = prefixsource;
             if(prefix_index & 3)
             {
-                char* tgt = prefixbuffer + sizeof(prefixbuffer) - prefixlength - 1;
-                prefix = tgt;
-                *tgt = stringconstants[(prefix_index&3)-1];
-                std::memcpy(tgt+1, prefixsource, prefixlength++);
+                prefix = prefixbuffer;
+                prefixbuffer[0] = stringconstants[(prefix_index&3)-1];
+                std::memcpy(&prefixbuffer[1], prefixsource, prefixlength++);
             }
 
             // Calculate length of prefix + source
-            unsigned sourcelength    = info.length;
             unsigned combined_length = sourcelength + prefixlength;
             // Clamp it into maximum permitted width
             if(combined_length > max_width)
@@ -501,7 +492,7 @@ namespace myprintf
                 pad_flags |= flag_source_last;
             }
 
-            // Only local variables needed here: prefix,source,stringconstants,pad_flags,sourcelength
+            // Only local variables needed here: prefix,pad_flags, source,sourcelength, stringconstants
             if( (pad_flags & flag_prefix_first)) append(prefix, (pad_flags >> 27) & 7);
             if(!(pad_flags & flag_source_last))  append(source, sourcelength);
             append_spaces(stringconstants+2, pad_flags & noflags);
@@ -547,6 +538,8 @@ namespace myprintf
         prn state;
         state.param = param;
         state.put   = put;
+
+        char numbuffer[NUMBUFFER_SIZE];
 
         /* Positional parameters support:
          * Pass 3: Calculate the number of parameters,
@@ -615,7 +608,6 @@ namespace myprintf
                     if(action_round) state.append(fmt, 1);
                     continue;
                 }
-                if(unlikely(*++fmt == '%')) { goto literal; }
 
                 #define GET_ARG(acquire_type, variable, type_index, which_param_index) \
                     acquire_type variable = (SUPPORT_POSITIONAL_PARAMETERS && round != 0) \
@@ -641,15 +633,18 @@ namespace myprintf
                 // thereby reducing register pressure, stack usage,
                 // spilling etc., resulting in a smaller compiled binary.
 
-                const char* source = state.numbuffer;
-                state.info = prn::widthinfo{};
+                const char* source = numbuffer;
+                unsigned    length = 0;
 
+            moreflags1:
+                ++fmt;
             moreflags:;
                 switch(*fmt)
                 {
                     case '\0': goto unexpected;
+                    case '%': goto literal;
 
-                    case '-': fmt_flags |= fmt_leftalign; moreflags1: ++fmt; goto moreflags;
+                    case '-': fmt_flags |= fmt_leftalign; goto moreflags1;
                     case ' ': fmt_flags |= fmt_space;     goto moreflags1;
                     case '+': fmt_flags |= fmt_plussign;  goto moreflags1;
                     case '#': fmt_flags |= fmt_alt;       goto moreflags1;
@@ -703,8 +698,8 @@ namespace myprintf
 
                     // %n format
                     case 'n':
+                    if_constexpr(SUPPORT_N_FORMAT)
                     {
-                        if_constexpr(!SUPPORT_N_FORMAT) goto got_int;
                         GET_ARG(void*,pointer,3, param_index);
                         if(!action_round) continue;
 
@@ -721,7 +716,7 @@ namespace myprintf
                         }
                         else                                                  { *static_cast<int*>(pointer) = value; }
                         continue; // Nothing to format
-                    }
+                    } else goto got_int;
 
                     // String format
                     case 's':
@@ -732,7 +727,7 @@ namespace myprintf
                         source = static_cast<const char*>(pointer);
                         if(source)
                         {
-                            state.info.length = std::strlen(source);
+                            length = std::strlen(source);
                             // Only calculate length on non-null pointers
                         }
 
@@ -746,8 +741,8 @@ namespace myprintf
                         GET_ARG(int,c,0, param_index);
                         if(!action_round) continue;
 
-                        state.numbuffer[0] = static_cast<char>(c);
-                        state.info.length = 1;
+                        numbuffer[0] = static_cast<char>(c);
+                        length = 1;
                         if_constexpr(STRICT_COMPLIANCE)
                         {
                             precision = ~0u; // No max-width
@@ -758,8 +753,8 @@ namespace myprintf
 
                     // Pointer and integer formats
                     case 'p': { fmt_flags |= fmt_alt | fmt_pointer; set_sizebase(base_hex, void*); goto got_int; }
+                    case 'X': { fmt_flags |= fmt_ucbase; }          PASSTHRU
                     case 'x': {                                     set_base(base_hex); goto got_int; }
-                    case 'X': { fmt_flags |= fmt_ucbase;            set_base(base_hex); goto got_int; }
                     case 'o': {                                     set_base(base_octal); goto got_int; }
                     case 'b': { if_constexpr(SUPPORT_BINARY_FORMAT) { set_base(base_binary); } goto got_int; }
                     case 'd': case 'i': { fmt_flags |= fmt_signed; goto got_int; }
@@ -788,13 +783,18 @@ namespace myprintf
                         }
 
                         unsigned min_width = 1;
-                        if(unlikely(precision != ~0u))
+                        if(precision != ~0u)
                         {
                             if_constexpr(STRICT_COMPLIANCE) { fmt_flags &= ~fmt_zeropad; }
                             min_width = precision;
                             precision = ~0u; // No max-width
                         }
-                        state.format_integer(value, fmt_flags, min_width);
+
+                        // Run flush() before we overwrite prefixbuffer/numbuffer,
+                        // because putbegin/putend can still refer to that data at this point
+                        state.flush();
+
+                        std::tie(length,fmt_flags) = format_integer(numbuffer, value, fmt_flags, min_width);
                         break;
                     }
 
@@ -818,18 +818,22 @@ namespace myprintf
                     case 'f': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; got_flt:;
                     if_constexpr(SUPPORT_FLOAT_FORMATS)
                     {
+                        // Run flush() before we overwrite prefixbuffer/numbuffer,
+                        // because putbegin/putend can still refer to that data at this point
+                        state.flush();
+
                         if(precision == ~0u) precision = 6;
                         if(SUPPORT_LONG_DOUBLE && is_type(long long))
                         {
                             GET_ARG(long double,value,5, param_index);
                             if(!action_round) continue;
-                            state.format_float(value, fmt_flags, precision);
+                            std::tie(length,fmt_flags) = format_float(numbuffer, value, fmt_flags, precision);
                         }
                         else
                         {
                             GET_ARG(double,value,4, param_index);
                             if(!action_round) continue;
-                            state.format_float(value, fmt_flags, precision);
+                            std::tie(length,fmt_flags) = format_float(numbuffer, value, fmt_flags, precision);
                         }
                         precision = ~0u; // No max-width
                         break;
@@ -850,9 +854,7 @@ namespace myprintf
                      */
 
                 }
-
-                //if(action_round) // This condition is redundant, but seems to reduce binary size
-                state.format_string(source, min_width, precision, fmt_flags);
+                state.format_string(source, length, min_width, precision, fmt_flags);
 
                 #undef GET_ARG
             }
