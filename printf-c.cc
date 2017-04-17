@@ -52,6 +52,8 @@ static constexpr bool SUPPORT_POSITIONAL_PARAMETERS = false;
 #else
  #define if_constexpr if
 #endif
+namespace
+{
 namespace myprintf
 {
     typedef std::int_fast64_t  intfmt_t;
@@ -163,15 +165,15 @@ namespace myprintf
     #define is_type(type) \
         (fmt_flags / (FLAG_MUL * BASE_MUL) == sizeof(type)-1)
 
-    static inline unsigned clamp(unsigned value, unsigned minvalue, unsigned maxvalue) VERYINLINE;
-    static inline unsigned clamp(unsigned value, unsigned minvalue, unsigned maxvalue)
+    inline unsigned clamp(unsigned value, unsigned minvalue, unsigned maxvalue) VERYINLINE;
+    inline unsigned clamp(unsigned value, unsigned minvalue, unsigned maxvalue)
     {
         if(value < minvalue) value = minvalue;
         if(value > maxvalue) value = maxvalue;
         return value;
     }
-    static inline unsigned estimate_uinteger_width(uintfmt_t uvalue, unsigned base) VERYINLINE /*NOINLINE*/;
-    static inline unsigned estimate_uinteger_width(uintfmt_t uvalue, unsigned base)
+    inline unsigned estimate_uinteger_width(uintfmt_t uvalue, unsigned base) VERYINLINE /*NOINLINE*/;
+    inline unsigned estimate_uinteger_width(uintfmt_t uvalue, unsigned base)
     {
         unsigned width = 0;
         while(uvalue != 0)
@@ -182,23 +184,24 @@ namespace myprintf
         return width;
     }
 
-    static void put_uinteger(char* target, uintfmt_t uvalue, unsigned width, unsigned char base, char alphaoffset) /*NOINLINE*/
+    void put_uinteger(char* target, uintfmt_t uvalue, unsigned width, unsigned char base, char alphaoffset) /*NOINLINE*/
     {
         for(unsigned w=width; w-- > 0; )
         {
+            // FIXME: gcc-arm-embedded calls __aeabi_uldivmod twice here for no reason
             unsigned digitvalue = uvalue % base; uvalue /= base;
             target[w] = digitvalue + (likely(digitvalue < 10) ? '0' : alphaoffset);
         }
     }
-    static void put_uint_decimal(char* target, uintfmt_t uvalue, unsigned width) NOINLINE;
-    static void put_uint_decimal(char* target, uintfmt_t uvalue, unsigned width)
+    void put_uint_decimal(char* target, uintfmt_t uvalue, unsigned width) NOINLINE;
+    void put_uint_decimal(char* target, uintfmt_t uvalue, unsigned width)
     {
         put_uinteger(target, uvalue, width, 10, '0');
     }
 
-    static inline std::pair<unsigned,unsigned> format_integer
+    inline std::pair<unsigned,unsigned> format_integer
         (char* numbuffer, intfmt_t value, unsigned fmt_flags, unsigned min_digits) VERYINLINE;
-    static inline std::pair<unsigned,unsigned> format_integer
+    inline std::pair<unsigned,unsigned> format_integer
         (char* numbuffer, intfmt_t value, unsigned fmt_flags, unsigned min_digits)
     {
         // Maximum length is ceil(log8(2^64)) = ceil(64/3+1) = 23 characters (+1 for octal leading zero)
@@ -212,8 +215,9 @@ namespace myprintf
         if(fmt_flags & fmt_signed)
         {
             if(value < 0)                   { value = -value; fmt_flags += PFX_MUL*prefix_minus; }
-            else signed_flags: if(fmt_flags & fmt_plussign) { fmt_flags += PFX_MUL*prefix_plus;  }
+            else signed_flags: if(fmt_flags & fmt_plussign) { fmt_flags += PFX_MUL*prefix_plus;  } // 0,4,8,12 -> 0,2,3,2
             else               if(fmt_flags & fmt_space)    { fmt_flags += PFX_MUL*prefix_space; }
+                            //fmt_flags += (fmt_flags&fmt_space) * (PFX_MUL*prefix_space) / fmt_space;
             // GNU libc printf ignores '+' and ' ' modifiers on unsigned formats, but curiously, not for %p.
             // Note that '+' overrides ' ' if both are used.
         }
@@ -226,15 +230,18 @@ namespace myprintf
             //        8   /2 = 4  -1 = 3
             //        10  /2 = 5  -1 = 4
             //        16  /2 = 8  -1 = 7
-            if(b == 16)
+            switch(b)
             {
-                // Add 0x/0X prefix
-                if(value != 0) { fmt_flags += PFX_MUL*((fmt_flags & fmt_ucbase) ? prefix_0X : prefix_0x); }
-            }
-            else if(b == 8)
-            {
-                // Make sure there's at least 1 leading '0'
-                if(value != 0 || !width) { width += 1; }
+                case 16:
+                    // Add 0x/0X prefix
+                    //if(value != 0) { fmt_flags += PFX_MUL*((fmt_flags & fmt_ucbase) ? prefix_0X : prefix_0x); }
+                    fmt_flags += (value!=0)*(PFX_MUL*prefix_0x + (fmt_flags&fmt_ucbase)*(PFX_MUL*prefix_0X-PFX_MUL*prefix_0x)/fmt_ucbase);
+                    break;
+                case 8:
+                    // Make sure there's at least 1 leading '0'
+                    // Note: if value=0, width=0
+                    ++width;
+                    break;
             }
         }
 
@@ -245,7 +252,7 @@ namespace myprintf
     }
 
     template<typename FloatType>
-    static inline std::pair<unsigned,unsigned> format_float
+    inline std::pair<unsigned,unsigned> format_float
         (char* numbuffer, FloatType value, unsigned fmt_flags, unsigned precision)
     {
         unsigned char prefix_index = 0;
@@ -454,16 +461,13 @@ namespace myprintf
             {
                 combined_length = max_width;
                 // Figure out how to divide this between prefix and source
-                if(unlikely(combined_length <= prefixlength))
+                // By default, shorten the source, but print full prefix
+                sourcelength = combined_length - prefixlength;
+                // Only room to print some of the prefix, and nothing of the source?
+                if(unlikely(combined_length < prefixlength))
                 {
-                    // Only room to print some of the prefix, and nothing of the source
                     prefixlength = combined_length;
                     sourcelength = 0;
-                }
-                else
-                {
-                    // Shorten the source, but print full prefix
-                    sourcelength = combined_length - prefixlength;
                 }
             }
             // Calculate the padding width
@@ -501,9 +505,9 @@ namespace myprintf
         }
     };
 
-    //static unsigned read_int(const char*& fmt, unsigned def) NOINLINE;
-    static inline unsigned read_int(const char*& fmt, unsigned def) VERYINLINE;
-    static inline unsigned read_int(const char*& fmt, unsigned def)
+    //unsigned read_int(const char*& fmt, unsigned def) NOINLINE;
+    inline unsigned read_int(const char*& fmt, unsigned def) VERYINLINE;
+    inline unsigned read_int(const char*& fmt, unsigned def)
     {
         if(*fmt >= '0' && *fmt <= '9')
         {
@@ -513,8 +517,8 @@ namespace myprintf
         }
         return def;
     }
-    static unsigned read_param_index(const char*& fmt) NOINLINE;
-    static unsigned read_param_index(const char*& fmt)
+    unsigned read_param_index(const char*& fmt) NOINLINE;
+    unsigned read_param_index(const char*& fmt)
     {
         const char* bkup = fmt;
         unsigned index = read_int(fmt, 0);
@@ -932,6 +936,7 @@ namespace myprintf
     #undef is_type
     #undef BASE_MUL
     #undef FLAG_MUL
+}
 }
 #ifdef __GNUC__
  #pragma GCC pop_options
