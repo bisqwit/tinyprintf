@@ -36,9 +36,12 @@ static constexpr bool SUPPORT_POSITIONAL_PARAMETERS = false;
 #endif
 #if __cplusplus >= 201400 && (!defined(__GNUC__) || __GNUC__ >= 7)
  #define PASSTHRU   [[fallthrough]];
- #define if_constexpr if constexpr
 #else
  #define PASSTHRU
+#endif
+#if __cplusplus >= 201700 && (!defined(__GNUC__) || __GNUC__ >= 7)
+ #define if_constexpr if constexpr
+#else
  #define if_constexpr if
 #endif
 namespace myprintf
@@ -599,7 +602,7 @@ namespace myprintf
                         : (/*std::printf("va_arg(%s)\n", #acquire_type),*/ va_arg(ap, acquire_type))
 
                 // Read possible position-index for the value (it comes before flags / widths)
-                unsigned param_index = SUPPORT_POSITIONAL_PARAMETERS ? read_param_index(fmt) : 0;
+                unsigned param_index = 0; if_constexpr(SUPPORT_POSITIONAL_PARAMETERS) param_index = read_param_index(fmt);
 
                 // Read format flags
                 unsigned char fmt_flags = 0;
@@ -619,7 +622,7 @@ namespace myprintf
                 {
                     ++fmt;
 
-                    unsigned opt_index = SUPPORT_POSITIONAL_PARAMETERS ? read_param_index(fmt) : 0;
+                    unsigned opt_index = 0; if_constexpr(SUPPORT_POSITIONAL_PARAMETERS) opt_index = read_param_index(fmt);
                     GET_ARG(int,v,0, opt_index);
 
                     min_width = (v < 0) ? -v : v;
@@ -638,7 +641,7 @@ namespace myprintf
                     {
                         ++fmt;
 
-                        unsigned opt_index = SUPPORT_POSITIONAL_PARAMETERS ? read_param_index(fmt) : 0;
+                        unsigned opt_index = 0; if_constexpr(SUPPORT_POSITIONAL_PARAMETERS) opt_index = read_param_index(fmt);
                         GET_ARG(int,v,0, opt_index);
 
                         if(v >= 0) { precision = v; } // negative value is treated as unset
@@ -657,16 +660,16 @@ namespace myprintf
                 unsigned size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(int);
                 switch(*fmt)
                 {
-                    case 't': if(!SUPPORT_T_LENGTH) break;
-                              size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(std::ptrdiff_t); ++fmt; break;
+                    case 't': if_constexpr(SUPPORT_T_LENGTH) {
+                              size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(std::ptrdiff_t); ++fmt; } break;
                     case 'z': size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(std::size_t);    ++fmt; break;
                     case 'l': size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(long);       if(*++fmt != 'l') break; PASSTHRU
                     case 'L': size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(long long);      ++fmt; break; // Or 'long double'
-                    case 'j': if(!SUPPORT_J_LENGTH) break;
-                              size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(std::intmax_t);  ++fmt; break;
-                    case 'h': if(!SUPPORT_H_LENGTHS) break;
+                    case 'j': if_constexpr(SUPPORT_J_LENGTH) {
+                              size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(std::intmax_t);  ++fmt; } break;
+                    case 'h': if_constexpr(SUPPORT_H_LENGTHS) {
                               size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(short);      if(*++fmt != 'h') break; /*PASSTHRU*/
-                              size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(char);           ++fmt; break;
+                              size_base_spec = (base_decimal-1) + BASE_MUL*sizeof(char);           ++fmt; } break;
                 }
 
                 // Read the format type
@@ -678,25 +681,25 @@ namespace myprintf
                     case '\0': goto unexpected;
                     case 'n':
                     {
-                        if(!SUPPORT_N_FORMAT) goto got_int;
+                        if_constexpr(!SUPPORT_N_FORMAT) goto got_int;
                         GET_ARG(void*,pointer,3, param_index);
                         if(!action_round) continue;
 
                         auto value = state.param - param;
                         if(unlikely((size_base_spec/BASE_MUL) != sizeof(int)))
                         {
-                            if(sizeof(long) != sizeof(long long)
-                            && (size_base_spec/BASE_MUL) == sizeof(long long))  { *static_cast<long long*>(pointer) = value; }
-                            else if(sizeof(int) != sizeof(long)
+                            if(sizeof(int) != sizeof(long)
                                  && (size_base_spec/BASE_MUL) == sizeof(long))  { *static_cast<long*>(pointer) = value; }
                             else if(SUPPORT_H_LENGTHS
                                  && sizeof(int) != sizeof(short)
                                  && (size_base_spec/BASE_MUL) == sizeof(short)) { *static_cast<short*>(pointer) = value; }
-                            else /*if(SUPPORT_H_LENGTHS
+                            else if(SUPPORT_H_LENGTHS
                                  && sizeof(int) != sizeof(char)
-                                 && (size_base_spec/BASE_MUL) == sizeof(char))*/{ *static_cast<signed char*>(pointer) = value; }
+                                 && (size_base_spec/BASE_MUL) == sizeof(char))  { *static_cast<signed char*>(pointer) = value; }
+                            else /*if(sizeof(long) != sizeof(long long)
+                            && (size_base_spec/BASE_MUL) == sizeof(long long))*/{ *static_cast<long long*>(pointer) = value; }
                         }
-                        else                                  { *static_cast<int*>(pointer) = value; }
+                        else                                                    { *static_cast<int*>(pointer) = value; }
                         continue; // Nothing to format
                     }
                     case 's':
@@ -720,7 +723,7 @@ namespace myprintf
 
                         state.numbuffer[0] = static_cast<char>(c);
                         info.length = 1;
-                        if(STRICT_COMPLIANCE)
+                        if_constexpr(STRICT_COMPLIANCE)
                         {
                             precision = ~0u; // No max-width
                         }
@@ -730,7 +733,7 @@ namespace myprintf
                     case 'x': {                                size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_hex-1);   goto got_int; }
                     case 'X': { state.fmt_flags |= fmt_ucbase; size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_hex-1);   goto got_int; }
                     case 'o': {                                size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_octal-1); goto got_int; }
-                    case 'b': { if(SUPPORT_BINARY_FORMAT) { size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_binary-1); } goto got_int; }
+                    case 'b': { if_constexpr(SUPPORT_BINARY_FORMAT) { size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_binary-1); } goto got_int; }
                     case 'd': /*PASSTHRU*/
                     case 'i': { state.fmt_flags |= fmt_signed; goto got_int; }
                     case 'u': default: got_int:
@@ -762,22 +765,23 @@ namespace myprintf
                         break;
                     }
 
-                    case 'A': if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
-                    case 'a': if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_hex-1);
+                    case 'A': if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
+                    case 'a': if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; size_base_spec = (size_base_spec & ~(BASE_MUL-1)) + (base_hex-1);
                               if(precision == ~0u) { } /* TODO: set enough precision for exact representation */
                               goto got_fmt_e;
-                    case 'E': if(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
-                    case 'e': if(!SUPPORT_FLOAT_FORMATS) goto got_int;
+                    case 'E': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
+                    case 'e': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int;
                               // Set up 'e' flags
                     got_fmt_e:state.fmt_flags |= fmt_exponent; // Mode: Always exponent
                               goto got_flt;
-                    case 'G': if(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
-                    case 'g': if(!SUPPORT_FLOAT_FORMATS) goto got_int;
+                    case 'G': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
+                    case 'g': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int;
                               // Set up 'g' flags
                               state.fmt_flags |= fmt_autofloat; // Mode: Autodetect
                               goto got_flt;
-                    case 'F': if(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
-                    case 'f': if(!SUPPORT_FLOAT_FORMATS) goto got_int; got_flt:
+                    case 'F': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; state.fmt_flags |= fmt_ucbase; PASSTHRU
+                    case 'f': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; got_flt:;
+                    if_constexpr(SUPPORT_FLOAT_FORMATS)
                     {
                         if(precision == ~0u) precision = 6;
                         if(SUPPORT_LONG_DOUBLE && (size_base_spec/BASE_MUL) == sizeof(long long))
@@ -862,9 +866,9 @@ namespace myprintf
                                 case 1: { long      v = va_arg(ap,long);      std::memcpy(tgt,&v,sizeof(v)); } break;
                                 case 2: { long long v = va_arg(ap,long long); std::memcpy(tgt,&v,sizeof(v)); } break;
                                 case 3: { void*     v = va_arg(ap,void*);     std::memcpy(tgt,&v,sizeof(v)); } break;
-                                case 4: if(!SUPPORT_FLOAT_FORMATS) goto type0;
+                                case 4: if_constexpr(!SUPPORT_FLOAT_FORMATS) goto type0;
                                         { double      v = va_arg(ap,double);      std::memcpy(tgt,&v,sizeof(v)); } break;
-                                case 5: if(!SUPPORT_FLOAT_FORMATS || !SUPPORT_LONG_DOUBLE) goto type0;
+                                case 5: if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_LONG_DOUBLE) goto type0;
                                         { long double v = va_arg(ap,long double); std::memcpy(tgt,&v,sizeof(v)); } break;
                             }
                         }
