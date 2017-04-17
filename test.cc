@@ -102,6 +102,7 @@ void RunTest(const std::string& formatstr, Params... params)
     #pragma omp atomic
     ++tests_run;
 
+#ifdef SUPPORT_SNPRINTF
     result1[0]='X'; result1[1]='\0';
     result2[0]='X'; result2[1]='\0';
     int limit = out2/2;
@@ -121,6 +122,7 @@ void RunTest(const std::string& formatstr, Params... params)
     }
     #pragma omp atomic
     ++tests_run;
+#endif
 }
 extern "C" {
 int _write(int,const unsigned char*,unsigned,unsigned) { return 0; }
