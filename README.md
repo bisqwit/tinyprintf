@@ -115,9 +115,11 @@ Where
 * `wprintf`, `fwprintf`, `swprintf`, `vwprintf`, `vfwprintf`, and `vswprintf` are not supported (C99, C++98)
 * `printf_s`, `fprintf_s`, `sprintf_s`, `snprintf_s`, `vprintf_s`, `vfprintf_s`, `vsprintf_s`, `vsnprintf_s`, `wprintf_s`, `fwprintf_s`, `swprintf_s`, `snwprintf_s`, `vwprintf_s`, `vfwprintf_s`, `vswprintf_s`, and `vsnwprintf_s` are not supported (C11).
 * Behavior differs to GNU libc printf when a nul pointer is printed with `p` or `s` formats and max-width specifier is used
-* If positional parameters are enabled, there may be a maximum of 32767 parameters to printf.
+* If positional parameters are enabled, there may be a maximum of 1023 parameters to printf.⁵
 * `vsnprintf` and `snprintf` are thread-safe only if your compiler honors the `thread_local` attribute.
 * If positional parameters are enabled, the format string can be scanned up to three times. If positional parameters are enabled but not used in the format string, no dynamic allocation occurs, but the format string is still scanned twice.
+
+⁵) If you really need more than this, edit MAX_EXPLICIT_PARAMS and MAX_AUTO_PARAMS in printf-c.cc. Their product should be less 2³²/MAX_ROUNDS.
 
 ## Known bugs
 

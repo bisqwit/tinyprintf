@@ -128,8 +128,14 @@ extern "C" {
 int _write(int,const unsigned char*,unsigned,unsigned) { return 0; }
 }
 
+static void TortureTest()
+{
+}
+
 int main()
 {
+    std::printf("Running regular tests...\n");
+
     RunTest("%%");
     RunTest("%d%d", 1234,5678);
     RunTest("%d%s", 1234,"test");
@@ -367,6 +373,10 @@ int main()
             }
         }
     }
+
+    std::printf("Running torture test...\n");
+    TortureTest();
+
     if(tests_failed)
         std::printf("%u tests run, %u tests failed\n", tests_run, tests_failed);
     else

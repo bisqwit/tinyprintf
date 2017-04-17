@@ -30,10 +30,21 @@ static constexpr bool SUPPORT_POSITIONAL_PARAMETERS = false;
  #define VERYINLINE __attribute__((optimize("inline-functions"),always_inline))
  #pragma GCC push_options
  #pragma GCC optimize ("Os")
+ /**/
+ #pragma GCC optimize ("no-align-functions")
+ #pragma GCC optimize ("no-align-jumps")
+ #pragma GCC optimize ("no-align-loops")
+ #pragma GCC optimize ("no-align-labels")
+ #pragma GCC optimize ("reorder-blocks")
+ #pragma GCC optimize ("reorder-blocks-and-partition")
+ #pragma GCC optimize ("prefetch-loop-arrays")
+ /**/
  //#pragma GCC optimize ("no-ipa-cp-clone")
  #pragma GCC optimize ("inline-functions")
  //#pragma GCC optimize ("conserve-stack")
  //#pragma GCC optimize ("no-defer-pop")
+ #pragma GCC optimize ("tree-switch-conversion")
+ //#pragma GCC optimize ("param=case-values-threshold=1")
  #define likely(x)   __builtin_expect(!!(x), 1)
  #define unlikely(x) __builtin_expect(!!(x), 0)
 #else
@@ -562,7 +573,8 @@ namespace myprintf
          */
         //printf("---Interpret %s\n", fmt_begin);
 
-        constexpr unsigned MAX_AUTO_PARAMS = 0x8000, MAX_ROUNDS = 4, POS_PARAM_MUL = MAX_AUTO_PARAMS * MAX_ROUNDS;
+        constexpr unsigned MAX_AUTO_PARAMS = 0x10000, MAX_ROUNDS = 4, POS_PARAM_MUL = MAX_AUTO_PARAMS * MAX_ROUNDS;
+        constexpr unsigned MAX_EXPLICIT_PARAMS = 0x400;
         auto_dealloc_pointer<SUPPORT_POSITIONAL_PARAMETERS>::type param_data_table{};
 
         // Figure out the largest parameter size. This is a compile-time constant.
@@ -580,12 +592,20 @@ namespace myprintf
             {
                 if(which_param_index == 0)
                 {
+                    // Automatic parameter index; increment counter, and use the possibly-wrapped-around counter
                     which_param_index = round++ % MAX_AUTO_PARAMS;
                 }
                 else
                 {
+                    // Explicit parameter index (1-n)
+                    // Range check
+                    which_param_index = (which_param_index-1) % MAX_EXPLICIT_PARAMS + 1;
+                    // Update the max counter
                     if(which_param_index > round / POS_PARAM_MUL)
+                    {
                         round = round % POS_PARAM_MUL + which_param_index * POS_PARAM_MUL;
+                    }
+                    // Decrease by 1 in order to use as an array index
                     --which_param_index;
                 }
                 unsigned short* param_offset_table = reinterpret_cast<unsigned short *>(&table[0]);
@@ -653,6 +673,10 @@ namespace myprintf
             moreflags1:
                 ++fmt;
             moreflags:;
+                /* Note that this state machine is designed with the assumption of valid
+                 * format string. If there are e.g. flag characters where they
+                 * should not be, all sorts of things will go wrong here.
+                 */
                 switch(*fmt)
                 {
                     case '\0': goto unexpected;
