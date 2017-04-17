@@ -21,7 +21,7 @@ static constexpr bool SUPPORT_J_LENGTH      = true; // Whether to support j leng
 static constexpr bool SUPPORT_FLOAT_FORMATS = false; // Floating pointing formats
 static constexpr bool SUPPORT_A_FORMAT      = false; // Floating point hex format
 static constexpr bool SUPPORT_LONG_DOUBLE   = false;
-static constexpr bool SUPPORT_POSITIONAL_PARAMETERS = false;
+static constexpr bool SUPPORT_POSITIONAL_PARAMETERS = true;
 
 #ifdef __GNUC__
  #define NOINLINE   __attribute__((noinline))
@@ -141,17 +141,62 @@ namespace myprintf
     static constexpr unsigned char prefix_INF   = 4*8;
     static constexpr unsigned char prefix_data_length = SUPPORT_FLOAT_FORMATS ? (8+8+5+6) : (2+2+5+6);
 
+    // Bitfield utilities
+    template<unsigned bitno, unsigned nbits, typename T,
+             unsigned dim=1, unsigned index=0>
+    struct RegBitSet
+    {
+        T data[dim];
+
+        static constexpr T mask = ((1ull << (nbits/2)) << (nbits-(nbits/2))) - 1ull;
+
+        operator T() const { return (data[index] >> bitno) & mask; }
+
+        template<typename T2>
+        RegBitSet& operator=(T2 val)
+        {
+            data[index] = (data[index] & ~(mask << bitno))
+                        | ((val & mask) << bitno);
+            return *this;
+        }
+
+        //T* operator &() { return &data[index]; }
+        //T& ref()        { return data[index]; }
+
+        //template<typename T2> RegBitSet& operator^= (T2 val) { return *this = (T)*this ^ (T)val; }
+        //template<typename T2> RegBitSet& operator-= (T2 val) { return *this = (T)*this - (T)val; }
+        template<typename T2> RegBitSet& operator+= (T2 val) { return *this = (T)*this + (T)val; }
+        template<typename T2> RegBitSet& operator|= (T2 val) { return *this = (T)*this | (T)val; }
+        template<typename T2> RegBitSet& operator&= (T2 val) { return *this = (T)*this & (T)val; }
+
+        /*RegBitSet& operator|= (unsigned value)
+        {
+            data[index] |= (value << bitno);
+            return *this;
+        }
+        RegBitSet& operator&= (unsigned value)
+        {
+            data[index] &= ((~T() &~ (mask << bitno)) | (value << bitno));
+            return *this;
+        }*/
+
+        /*RegBitSet& operator++ ()  { return *this = (T)*this + T(1); }
+        RegBitSet& operator-- ()  { return *this = (T)*this - T(1); }
+        T operator++ (int) { T r(*this); ++*this; return r; }
+        T operator-- (int) { T r(*this); --*this; return r; }
+        bool operator! () const { return !operator T(); }*/
+    };
+
     struct prn
     {
         char* param;
         void (*put)(char*,const char*,std::size_t);
 
-        const char* putbegin = nullptr;
-        const char* putend   = nullptr;
+        const char* putbegin;
+        const char* putend;
 
         char prefixbuffer[SUPPORT_FLOAT_FORMATS ? 4 : 3]; // Longest: +inf or +0x
         char numbuffer[SUPPORT_BINARY_FORMAT ? 64 : 23];
-        unsigned char fmt_flags;
 
         void flush() NOINLINE
         {
@@ -192,11 +237,14 @@ namespace myprintf
             }
         }
 
-        /* sign_mode: 0 = unsigned, 1 = signed, 2 = pointer */
-        struct widthinfo
+        union WidthInfo
         {
-            std::size_t   length;
-            unsigned char prefix_index;
+            std::uint32_t length;
+            //RegBitSet<0,32, std::uint32_t,2, 0> length;
+            RegBitSet<0,10, std::uint32_t,2, 1> fmt_flags;    // at least 9 bits
+            RegBitSet<16,8, std::uint32_t,2, 1> prefix_index; // at least 6 bits
+            RegBitSet<24,5, std::uint32_t,2, 1> numeric_base; // at least 5 bits
+            RegBitSet<29,3, std::uint32_t,2, 1> integer_size; // at least 3 bits
         };
 
         static unsigned clamp(unsigned value, unsigned minvalue, unsigned maxvalue)
@@ -229,7 +277,7 @@ namespace myprintf
             put_uinteger(target, uvalue, width, 10, '0');
         }
 
-        widthinfo format_integer(intfmt_t value, unsigned char base, unsigned precision)
+        void format_integer(intfmt_t value, WidthInfo& info, unsigned precision)
         {
             // Maximum length is ceil(log8(2^64)) = ceil(64/3+1) = 23 characters (+1 for octal leading zero)
             static_assert(sizeof(numbuffer) >= (SUPPORT_BINARY_FORMAT ? 64 : 23), "Too small numbuffer");
@@ -238,34 +286,36 @@ namespace myprintf
             // because putbegin/putend can still refer to that data at this point
             flush();
 
-            unsigned char prefix_index = 0;
-
-            if(fmt_flags & fmt_pointer)
+            if(info.fmt_flags & fmt_pointer)
             {
-                if(unlikely(!value)) return {0, prefix_nil}; // (nil) and %p, no other prefix
+                if(unlikely(!value))
+                {
+                    info.prefix_index = prefix_nil; // (nil) and %p, no other prefix
+                    return;
+                }
                 if_constexpr(STRICT_COMPLIANCE) goto signed_flags;
             }
-            if(fmt_flags & fmt_signed)
+            if(info.fmt_flags & fmt_signed)
             {
-                if(value < 0)                   { value = -value; prefix_index = prefix_minus; }
-                else signed_flags: if(fmt_flags & fmt_plussign) { prefix_index = prefix_plus;  }
-                else               if(fmt_flags & fmt_space)    { prefix_index = prefix_space; }
+                if(value < 0)                        { value = -value; info.prefix_index = prefix_minus; }
+                else signed_flags: if(info.fmt_flags & fmt_plussign) { info.prefix_index = prefix_plus;  }
+                else               if(info.fmt_flags & fmt_space)    { info.prefix_index = prefix_space; }
                 // GNU libc printf ignores '+' and ' ' modifiers on unsigned formats, but curiously, not for %p.
                 // Note that '+' overrides ' ' if both are used.
             }
 
-            unsigned width = estimate_uinteger_width(value, base);
-            if(STRICT_COMPLIANCE && unlikely(fmt_flags & fmt_alt))
+            info.length = estimate_uinteger_width(value, info.numeric_base);
+            if(STRICT_COMPLIANCE && unlikely(info.fmt_flags & fmt_alt))
             {
-                switch(base)
+                switch(info.numeric_base)
                 {
                     case 8:
                         // Make sure there's at least 1 leading '0'
-                        if(value != 0 || precision == 0) { width += 1; }
+                        if(value != 0 || precision == 0) { info.length += 1; }
                         break;
                     case 16:
                         // Add 0x/0X prefix
-                        if(value != 0) { prefix_index += (fmt_flags & fmt_ucbase) ? prefix_0X : prefix_0x; }
+                        if(value != 0) { info.prefix_index += (info.fmt_flags & fmt_ucbase) ? prefix_0X : prefix_0x; }
                         break;
                 }
             }
@@ -275,22 +325,20 @@ namespace myprintf
             {
                 min_width = precision; // 0 is permitted
                 // This setting clears out zeropadding according to standard
-                if_constexpr(STRICT_COMPLIANCE) { fmt_flags &= ~fmt_zeropad; }
+                if_constexpr(STRICT_COMPLIANCE) { info.fmt_flags &= ~fmt_zeropad; }
             }
 
             // Range check
-            width = clamp(width, min_width, sizeof(numbuffer));
-            put_uinteger(numbuffer, value, width, base, ((fmt_flags & fmt_ucbase) ? 'A' : 'a')-10);
-            return {width, prefix_index};
+            info.length = clamp(info.length, min_width, sizeof(numbuffer));
+            put_uinteger(numbuffer, value, info.length, info.numeric_base, ((info.fmt_flags & fmt_ucbase) ? 'A' : 'a')-10);
         }
 
         template<typename FloatType>
-        widthinfo format_float(FloatType value, unsigned char base, unsigned precision)
+        void format_float(FloatType value, WidthInfo& info, unsigned precision)
         {
-            unsigned char prefix_index = 0;
-            if(value < 0)     { value = -value; prefix_index = prefix_minus; }
-            else if(fmt_flags & fmt_plussign) { prefix_index = prefix_plus;  }
-            else if(fmt_flags & fmt_space)    { prefix_index = prefix_space; }
+            if(value < 0)          { value = -value; info.prefix_index = prefix_minus; }
+            else if(info.fmt_flags & fmt_plussign) { info.prefix_index = prefix_plus;  }
+            else if(info.fmt_flags & fmt_space)    { info.prefix_index = prefix_space; }
 
             // Run flush() before we overwrite prefixbuffer/numbuffer,
             // because putbegin/putend can still refer to that data at this point
@@ -298,14 +346,15 @@ namespace myprintf
 
             if(!std::isfinite(value))
             {
-                return {0, (unsigned char)(prefix_index + (
-                                    std::isinf(value) ? ((fmt_flags & fmt_ucbase) ? prefix_INF : prefix_inf)
-                                                      : ((fmt_flags & fmt_ucbase) ? prefix_NAN : prefix_nan)))};
+                info.prefix_index +=
+                   (std::isinf(value) ? ((info.fmt_flags & fmt_ucbase) ? prefix_INF : prefix_inf)
+                                      : ((info.fmt_flags & fmt_ucbase) ? prefix_NAN : prefix_nan));
+                return;
             }
 
             int e_exponent=0;
 
-            if(SUPPORT_A_FORMAT && base == base_hex)
+            if(SUPPORT_A_FORMAT && info.numeric_base == base_hex)
             {
                 value = std::frexp(value, &e_exponent);
                 while(value > 0 && value*2 < 0x10) { value *= 2; --e_exponent; }
@@ -316,14 +365,14 @@ namespace myprintf
             }
 
             if(precision == ~0u) precision = 6;
-            if(fmt_flags & fmt_autofloat)
+            if(info.fmt_flags & fmt_autofloat)
             {
                 // Mode: Let X = E-style exponent, P = chosen precision.
                 //       If P > X >= -4, choose 'f' and P = P-1-X.
                 //       Else,           choose 'e' and P = P-1.
                 if(!precision) precision = 1;
                 if(int(precision) > e_exponent && e_exponent >= -4) { precision -= e_exponent+1; }
-                else                                                { precision -= 1; fmt_flags |= fmt_exponent; }
+                else                                                { precision -= 1; info.fmt_flags |= fmt_exponent; }
             }
 
             int head_width = 1;
@@ -332,7 +381,7 @@ namespace myprintf
             uintfmt_t uvalue = 0;
             if(value != FloatType(0))
             {
-                if(!(fmt_flags & fmt_exponent))
+                if(!(info.fmt_flags & fmt_exponent))
                 {
                     head_width = 1 + e_exponent;
                 }
@@ -348,7 +397,7 @@ namespace myprintf
                 value = rvalue / factor;
                 // Recalculate exponent from rounded value
                 e_exponent = std::floor(std::log10(value));
-                if(!(fmt_flags & fmt_exponent))
+                if(!(info.fmt_flags & fmt_exponent))
                 {
                     head_width = 1 + e_exponent;
                 }
@@ -358,7 +407,7 @@ namespace myprintf
             }
 
             unsigned exponent_width = 0;
-            unsigned point_width    = (precision > 0 || (fmt_flags & fmt_alt)) ? 1 : 0;
+            unsigned point_width    = (precision > 0 || (info.fmt_flags & fmt_alt)) ? 1 : 0;
             unsigned decimals_width = clamp(precision, 0, sizeof(numbuffer)-exponent_width-point_width-head_width);
 
             // Count the number of digits
@@ -375,7 +424,7 @@ namespace myprintf
 
             if(head_width < 1) head_width = 1;
 
-            if(fmt_flags & fmt_exponent)
+            if(info.fmt_flags & fmt_exponent)
             {
             /*
                 auto vv = value * std::pow(FloatType(10), FloatType(-e_exponent));
@@ -399,24 +448,23 @@ namespace myprintf
             }
 
             put_uint_decimal(numbuffer + 0, head, head_width);
-            unsigned tgt = head_width;
+            info.length = head_width;
             if(point_width)
             {
-                numbuffer[tgt] = '.'; tgt += 1;
-                put_uint_decimal(numbuffer + tgt, fraction, decimals_width);
-                tgt += decimals_width;
+                numbuffer[info.length] = '.'; info.length += 1;
+                put_uint_decimal(numbuffer + info.length, fraction, decimals_width);
+                info.length += decimals_width;
             }
             if(exponent_width)
             {
-                numbuffer[tgt++] = ((fmt_flags & fmt_ucbase) ? 'E' : 'e');
-                numbuffer[tgt++] = ((e_exponent < 0)         ? '-' : '+');
-                put_uint_decimal(numbuffer + tgt, e_exponent<0 ? -e_exponent : e_exponent, exponent_width-2);
-                tgt += exponent_width-2;
+                numbuffer[info.length++] = ((info.fmt_flags & fmt_ucbase) ? 'E' : 'e');
+                numbuffer[info.length++] = ((e_exponent < 0)              ? '-' : '+');
+                put_uint_decimal(numbuffer + info.length, e_exponent<0 ? -e_exponent : e_exponent, exponent_width-2);
+                info.length += exponent_width-2;
             }
-            return {tgt, prefix_index};
         }
 
-        void format_string(const char* source, unsigned min_width, unsigned max_width, widthinfo info)
+        void format_string(const char* source, unsigned min_width, unsigned max_width, WidthInfo info)
         {
             if(unlikely(source == nullptr)) { /* info.length = 0; */ info.prefix_index = prefix_null; }
             /* There are three possible combinations:
@@ -442,8 +490,7 @@ namespace myprintf
             }
 
             // Calculate length of prefix + source
-            unsigned sourcelength    = info.length;
-            unsigned combined_length = sourcelength + prefixlength;
+            unsigned combined_length = info.length + prefixlength;
             // Clamp it into maximum permitted width
             if(combined_length > max_width)
             {
@@ -453,12 +500,12 @@ namespace myprintf
                 {
                     // Only room to print some of the prefix, and nothing of the source
                     prefixlength = combined_length;
-                    sourcelength = 0;
+                    info.length = 0;
                 }
                 else
                 {
                     // Shorten the source, but print full prefix
-                    sourcelength = combined_length - prefixlength;
+                    info.length = combined_length - prefixlength;
                 }
             }
             // Calculate the padding width
@@ -473,11 +520,11 @@ namespace myprintf
             // the padding width (pad_flags).
 
             // Note: leftalign overrides zero-padding. Zero-padding also disabled for (nil),(null),nan,inf
-            if(fmt_flags & fmt_leftalign)
+            if(info.fmt_flags & fmt_leftalign)
             {
                 pad_flags |= flag_prefix_first;
             }
-            else if((fmt_flags & fmt_zeropad) && (!STRICT_COMPLIANCE || likely(info.prefix_index < prefix_nil)))
+            else if((info.fmt_flags & fmt_zeropad) && (!STRICT_COMPLIANCE || likely(info.prefix_index < prefix_nil)))
             {
                 pad_flags |= flag_prefix_first | flag_source_last;
                 stringconstants += PatternLength; // Zeropad
@@ -487,12 +534,12 @@ namespace myprintf
                 pad_flags |= flag_source_last;
             }
 
-            // Only local variables needed here: prefix,source,stringconstants,pad_flags,sourcelength
+            // Only local variables needed here: prefix,source,stringconstants,pad_flags,info.length
             if( (pad_flags & flag_prefix_first)) append(prefix, (pad_flags >> 27) & 7);
-            if(!(pad_flags & flag_source_last))  append(source, sourcelength);
+            if(!(pad_flags & flag_source_last))  append(source, info.length);
             append_spaces(stringconstants+2, pad_flags & noflags);
             if(!(pad_flags & flag_prefix_first)) append(prefix, (pad_flags >> 27) & 7);
-            if( (pad_flags & flag_source_last))  append(source, sourcelength);
+            if( (pad_flags & flag_source_last))  append(source, info.length);
         }
     };
 
@@ -530,6 +577,7 @@ namespace myprintf
     int myvprintf(const char* fmt_begin, std::va_list ap, char* param, void (*put)(char*,const char*,std::size_t))
     {
         prn state;
+        state.putbegin = state.putend = nullptr;
         state.param = param;
         state.put   = put;
 
@@ -611,49 +659,43 @@ namespace myprintf
                 unsigned param_index = 0; if_constexpr(SUPPORT_POSITIONAL_PARAMETERS) param_index = read_param_index(fmt);
 
                 // Read format flags
-                constexpr unsigned BASE_MUL = 0x10;
-                constexpr unsigned FLAG_MUL = 0x10000;
                 constexpr unsigned got_minwidth  = 0x100u;
-                unsigned fmt_flags = ((base_decimal-1) + BASE_MUL*sizeof(int)) * FLAG_MUL;
                 unsigned min_width = 0, precision = ~0u;
-                // fmt_flags:
-                //    bits 0-7:   state.fmt_flags
-                //    bit 8:      flag: min_width has been read
-                //    bits 16-19:  numeric base-1
-                //    bits 20-31: parameter size
 
-                // The numeric base is encoded into the same variable as fmt_flags
-                // to reduce the number of local variables,
-                // thereby reducing register pressure, stack usage,
-                // spilling etc., resulting in a smaller compiled binary.
+                #define set_size(type)          do { info.integer_size = sizeof(type)-1; } while(0)
+                #define set_base(base)          do { info.numeric_base = (base); } while(0)
+                #define set_sizebase(base,type) do { set_base(base); set_size(type); } while(0)
+                #define get_type()              (info.integer_size+1)
+                #define is_type(type)           (info.integer_size == sizeof(type)-1)
 
                 const char* source = state.numbuffer;
-                prn::widthinfo info{0,0};
+                prn::WidthInfo info{};
+                set_sizebase(base_decimal, int);
 
             moreflags:;
                 switch(*fmt)
                 {
                     case '\0': goto unexpected;
 
-                    case '-': fmt_flags |= fmt_leftalign; moreflags1: ++fmt; goto moreflags;
-                    case ' ': fmt_flags |= fmt_space;     goto moreflags1;
-                    case '+': fmt_flags |= fmt_plussign;  goto moreflags1;
-                    case '#': fmt_flags |= fmt_alt;       goto moreflags1;
-                    case '0': if(likely(!(fmt_flags & got_minwidth)))
-                              { fmt_flags |= fmt_zeropad; goto moreflags1; }
+                    case '-': info.fmt_flags |= fmt_leftalign; moreflags1: ++fmt; goto moreflags;
+                    case ' ': info.fmt_flags |= fmt_space;     goto moreflags1;
+                    case '+': info.fmt_flags |= fmt_plussign;  goto moreflags1;
+                    case '#': info.fmt_flags |= fmt_alt;       goto moreflags1;
+                    case '0': if(likely(!(info.fmt_flags & got_minwidth)))
+                              { info.fmt_flags |= fmt_zeropad; goto moreflags1; }
                               PASSTHRU
                     case '1': case '2': case '3': case '4': case '5':
                     case '6': case '7': case '8': case '9':
                     {
                         // Read min-width or precision
                         unsigned value = read_int(fmt, 0);
-                        if(!(fmt_flags & got_minwidth))
+                        if(!(info.fmt_flags & got_minwidth))
                             { min_width = value; }
                         else
                             { precision = value; }
                         goto moreflags;
                     }
-                    case '.': fmt_flags |= got_minwidth; goto moreflags1;
+                    case '.': info.fmt_flags |= got_minwidth; goto moreflags1;
                     case '*':
                     {
                         // Read indirect min-width or precision
@@ -661,10 +703,10 @@ namespace myprintf
 
                         unsigned opt_index = 0; if_constexpr(SUPPORT_POSITIONAL_PARAMETERS) opt_index = read_param_index(fmt);
                         GET_ARG(int,v,0, opt_index);
-                        if(!(fmt_flags & got_minwidth))
+                        if(!(info.fmt_flags & got_minwidth))
                         {
                             min_width = (v < 0) ? -v : v;
-                            if(v < 0) { fmt_flags |= fmt_leftalign; } // negative value sets left-aligning
+                            if(v < 0) { info.fmt_flags |= fmt_leftalign; } // negative value sets left-aligning
                         }
                         else
                         {
@@ -673,28 +715,17 @@ namespace myprintf
                         goto moreflags;
                     }
 
-                    #define set_sizebase(base,type) \
-                        (fmt_flags = (fmt_flags % FLAG_MUL) + FLAG_MUL * ((base-1) + BASE_MUL * sizeof(type)))
-                    #define set_base(base) \
-                        (fmt_flags = (fmt_flags & ((FLAG_MUL-1) + unsigned(~0ull * FLAG_MUL*BASE_MUL))) + (FLAG_MUL*(base-1)))
-                    #define get_base() \
-                        ((fmt_flags / FLAG_MUL) % BASE_MUL + 1)
-                    #define get_type() \
-                        (fmt_flags / (FLAG_MUL * BASE_MUL))
-                    #define is_type(type) \
-                        (get_type() == sizeof(type))
-
                     // Read possible length modifier.
                     case 't': if_constexpr(SUPPORT_T_LENGTH) {
-                              set_sizebase(base_decimal, std::ptrdiff_t); goto moreflags1; } else { goto got_int; }
-                    case 'z': set_sizebase(base_decimal, std::size_t);    goto moreflags1;
-                    case 'l': set_sizebase(base_decimal, long);       if(*++fmt != 'l') goto moreflags; PASSTHRU
-                    case 'L': set_sizebase(base_decimal, long long);      goto moreflags1; // Or 'long double'
+                              set_size(std::ptrdiff_t); goto moreflags1; } else { goto got_int; }
+                    case 'z': set_size(std::size_t);    goto moreflags1;
+                    case 'l': set_size(long);       if(*++fmt != 'l') goto moreflags; PASSTHRU
+                    case 'L': set_size(long long);      goto moreflags1; // Or 'long double'
                     case 'j': if_constexpr(SUPPORT_J_LENGTH) {
-                              set_sizebase(base_decimal, std::intmax_t);  goto moreflags1; } else { goto got_int; }
+                              set_size(std::intmax_t);  goto moreflags1; } else { goto got_int; }
                     case 'h': if_constexpr(SUPPORT_H_LENGTHS) {
-                              set_sizebase(base_decimal, short);      if(*++fmt != 'h') goto moreflags; /*PASSTHRU*/
-                              set_sizebase(base_decimal, char);           goto moreflags1; } else { goto got_int; }
+                              set_size(short);      if(*++fmt != 'h') goto moreflags; /*PASSTHRU*/
+                              set_size(char);           goto moreflags1; } else { goto got_int; }
 
                     // Read the format type
 
@@ -734,7 +765,6 @@ namespace myprintf
                         }
 
                         // precision is treated as maximum width
-                        state.fmt_flags = fmt_flags;
                         break;
                     }
 
@@ -750,18 +780,16 @@ namespace myprintf
                         {
                             precision = ~0u; // No max-width
                         }
-
-                        state.fmt_flags = fmt_flags;
                         break;
                     }
 
                     // Pointer and integer formats
-                    case 'p': { fmt_flags |= fmt_alt | fmt_pointer; set_sizebase(base_hex, void*); goto got_int; }
-                    case 'x': {                                     set_base(base_hex); goto got_int; }
-                    case 'X': { fmt_flags |= fmt_ucbase;            set_base(base_hex); goto got_int; }
-                    case 'o': {                                     set_base(base_octal); goto got_int; }
+                    case 'p': { info.fmt_flags |= fmt_alt | fmt_pointer; set_sizebase(base_hex, void*); goto got_int; }
+                    case 'x': {                                          set_base(base_hex); goto got_int; }
+                    case 'X': { info.fmt_flags |= fmt_ucbase;            set_base(base_hex); goto got_int; }
+                    case 'o': {                                          set_base(base_octal); goto got_int; }
                     case 'b': { if_constexpr(SUPPORT_BINARY_FORMAT) { set_base(base_binary); } goto got_int; }
-                    case 'd': case 'i': { fmt_flags |= fmt_signed; goto got_int; }
+                    case 'd': case 'i': { info.fmt_flags |= fmt_signed; goto got_int; }
                     case 'u': default: got_int:
                     {
                         intfmt_t value = 0;
@@ -779,50 +807,48 @@ namespace myprintf
                             }
                         }
                         if(!action_round) continue;
-                        if(!(fmt_flags & fmt_signed) && get_type() < sizeof(uintfmt_t))
+                        if(!(info.fmt_flags & fmt_signed) && get_type() < sizeof(uintfmt_t))
                         {
                             value &= ((uintfmt_t(1) << (8*get_type()))-1);
                         }
 
-                        state.fmt_flags = fmt_flags;
-                        info = state.format_integer(value, get_base(), precision);
+                        state.format_integer(value, info, precision);
                         precision = ~0u; // No max-width
                         break;
                     }
 
-                    case 'A': if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; fmt_flags |= fmt_ucbase; PASSTHRU
+                    case 'A': if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; info.fmt_flags |= fmt_ucbase; PASSTHRU
                     case 'a': if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_int; else {
                               set_base(base_hex);
                               if(precision == ~0u) { } /* TODO: set enough precision for exact representation */
-                              fmt_flags |= fmt_exponent;
+                              info.fmt_flags |= fmt_exponent;
                               goto got_flt; }
-                    case 'E': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; else { fmt_flags |= fmt_ucbase; } PASSTHRU
+                    case 'E': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; else { info.fmt_flags |= fmt_ucbase; } PASSTHRU
                     case 'e': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; else {
                               // Set up 'e' flags
-                              fmt_flags |= fmt_exponent; // Mode: Always exponent
+                              info.fmt_flags |= fmt_exponent; // Mode: Always exponent
                               goto got_flt; }
-                    case 'G': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; else { fmt_flags |= fmt_ucbase; } PASSTHRU
+                    case 'G': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; else { info.fmt_flags |= fmt_ucbase; } PASSTHRU
                     case 'g': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; else {
                               // Set up 'g' flags
-                              fmt_flags |= fmt_autofloat; // Mode: Autodetect
+                              info.fmt_flags |= fmt_autofloat; // Mode: Autodetect
                               goto got_flt; }
-                    case 'F': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; else { fmt_flags |= fmt_ucbase; } PASSTHRU
+                    case 'F': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; else { info.fmt_flags |= fmt_ucbase; } PASSTHRU
                     case 'f': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_int; got_flt:;
                     if_constexpr(SUPPORT_FLOAT_FORMATS)
                     {
                         if(precision == ~0u) precision = 6;
-                        state.fmt_flags = fmt_flags;
                         if(SUPPORT_LONG_DOUBLE && is_type(long long))
                         {
                             GET_ARG(long double,value,5, param_index);
                             if(!action_round) continue;
-                            info = state.format_float(value, get_base(), precision);
+                            state.format_float(value, info, precision);
                         }
                         else
                         {
                             GET_ARG(double,value,4, param_index);
                             if(!action_round) continue;
-                            info = state.format_float(value, get_base(), precision);
+                            state.format_float(value, info, precision);
                         }
                         precision = ~0u; // No max-width
                         break;
@@ -842,22 +868,15 @@ namespace myprintf
                      *                      Number of digits after it = precision.
                      */
 
-
-                    #undef set_sizebase
-                    #undef set_base
-                    #undef get_base
-                    #undef get_type
-                    #undef is_type
                 }
-                #if 0
-                switch(*fmt)
-                {
-                }
-                #endif
 
-                if(action_round) // This condition is redundant, but seems to reduce binary size
+                //if(action_round) // This condition is redundant, but seems to reduce binary size
                 state.format_string(source, min_width, precision, info);
                 #undef GET_ARG
+                #undef set_sizebase
+                #undef set_base
+                #undef get_type
+                #undef is_type
             }
         unexpected:;
             // Format string processing is complete.
