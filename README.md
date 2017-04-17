@@ -38,17 +38,14 @@ Where
   * The maximum precision-specifier applied to numeric conversions (minimum digits) is 22 digits, or 64 if SUPPORT_BINARY_FORMAT is set
   * Width/precision specifiers are ignored for the `"n"` format type
 * `flag` is zero or more of these letters, in any order: `"+" | "-" | "0" | "#" | " "`
-  * `"+"` specifies that a plus sign should be printed in front of a non-negative number. Only affects `"d"`, `"i"`, `"a"`, `"A"`, `"e"`, `"E"`, `"f"`, `"F"`, `"g"`, and `"G"` formats.
-  * `" "` specifies that a space should be printed in front of a non-negative number. Only affects `"d"`, `"i"`, `"a"`, `"A"`, `"e"`, `"E"`, `"f"`, `"F"`, `"g"`, and `"G"` formats.
+  * `"+"` specifies that a plus sign should be printed in front of a non-negative number. Only affects decimal non-unsigned numeric formats.
+  * `" "` specifies that a space should be printed in front of a non-negative number. Only affects decimal non-unsigned numeric formats. Ignored if `"+"` also given, or when printing non-numeric data.
   * `"-"` specifies that when padding to satisfy the minimum-width-specifier, the value should be left-aligned, not right-aligned.
-  * `"0"` specifies that when padding to satisfy the minimum-width-specifier, the value should be padded with zeroes, not spaces.
-  * "`#"` specifies that "0x" or "0X" should be printed in front of non-zero hexadecimal numbers, and that an octal number must always begin with zero.
+  * `"0"` specifies that when padding to satisfy the minimum-width-specifier, the value should be padded with zeroes, not spaces. Ignored if `"-"` also given, or if a precision-specifier is used, or if printing non-numeric data.
+  * "`#"` specifies that "0x" or "0X" should be printed in front of non-zero hexadecimal numbers, and that an octal number must always begin with zero, even if precision of 0 is explicitly specified.
   * `"'"` flag, defined by SUSv2, is not supported
   * `"I"` flag, defined by glibc, is not supported
   * Flags are ignored for the `"n"` format type.
-  * `"-"` overrides `"0"` if both are given
-  * `"+"` overrides `" "` if both are given
-  * `"0"` is ignored if a precision-specifier is given with a numeric conversion
 * `length-modifier` is `"h" | "hh" | "l" | "ll" | "L" | "j" | "z" | "t"`
   * `"h"` and `"hh"` are only supported if SUPPORT_H_LENGTHS is set
   * `"t"` is only supported if SUPPORT_T_LENGTH is set
@@ -74,7 +71,7 @@ Where
   * Thread-safe as long as your wfunc is thread-safe. `printf` calls are not locked, so prints from different threads can interleave.
 * Compatible with GCC’s optimizations where e.g. `printf("abc\n")` is automatically converted into `puts("abc")`
 * Positional parameters are fully supported (e.g. `printf("%2$s %1$0*3$ld", 5L, "test", 4);` works and prints “test 0005”), disabled by default
-  * If positional parameters are enabled and used, a dynamically allocated array is used to temporarily hold parameter information. The size of the array is `number-of-printf-parameters * (sizeof(short) + sizeof(largest-param))`, where largest-param is the largest printfable parameter supported by the enabled options (one of `int`, `long`, `long long`, `void*`, `double`, and `long double`). For instance, if the largest possible type is `long long`, `long long` is 8 bytes, a printf with 5 parameters will temporarily allocate 5 * (2+8) = 50 bytes of dynamic storage.
+  * If positional parameters are enabled and used, a dynamically allocated array is used to temporarily hold parameter information. The size of the array is directly proportional to the number of printf parameters. Each parameter takes about 10 bytes of memory (assuming the largest supported parameter is 64 bits wide).
   * If positional parameters are enabled but not used in the format string, no dynamic allocation occurs, but the format string is still scanned twice.
 
 ## Caveats
