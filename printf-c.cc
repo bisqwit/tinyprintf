@@ -109,7 +109,6 @@ namespace myprintf
         static const char* GetTable() VERYINLINE
         {
             static const char stringconstants_intonly[] {
-                '-','+',/*' ',*/
                 // eight spaces
                 ' ',' ',' ',' ', ' ',' ',' ',' ',
                 // eight zeros
@@ -117,6 +116,9 @@ namespace myprintf
                 // table of some multichar prefixes (15 letters)
                 /*'0',*/'x',  '0', 'X',
                 '(','n','i','l',')', '(','n','u','l','l',')',
+                // single-char prefixes
+                '-','+',' ',
+                // multichar-prefix specs
                 (0),      (2*32+0), (2*32+2), // "", 0x, 0X
                 char(5*32+4), char(6*32+9),   // nil,null
             };
@@ -128,7 +130,6 @@ namespace myprintf
         static const char* GetTable() VERYINLINE
         {
             static const char stringconstants_floats[] {
-                '-','+',/*' ',*/
                 // eight spaces
                 ' ',' ',' ',' ', ' ',' ',' ',' ',
                 // eight zeros
@@ -137,6 +138,9 @@ namespace myprintf
                 /*'0',*/'x','n','a','n','i','n','f',
                 '0',    'X','N','A','N','I','N','F',
                 '(','n','i','l',')', '(','n','u','l','l',')',
+                // single-char prefixes
+                '-','+',' ',
+                // multichar-prefix specs
                 (0),      (2*32+0), (2*32+8),            // "", 0x, 0X
                 char(5*32+16), char(6*32+21),            // nil,null
                 (3*32+2), (3*32+5), (3*32+10), (3*32+13) // nan,inf,NAN,INF
@@ -226,9 +230,14 @@ namespace myprintf
         if(fmt_flags & fmt_signed)
         {
             if(value < 0)                   { value = -value; fmt_flags += PFX_MUL*prefix_minus; }
-            else signed_flags: if(fmt_flags & fmt_plussign) { fmt_flags += PFX_MUL*prefix_plus;  } // 0,4,8,12 -> 0,2,3,2
-            else               if(fmt_flags & fmt_space)    { fmt_flags += PFX_MUL*prefix_space; }
+            else signed_flags: fmt_flags += ((((prefix_plus*((1u << fmt_plussign)
+                                                           + (1u << (fmt_plussign+fmt_space)))
+                                             + prefix_space*((1u << fmt_space)))*PFX_MUL) >> (fmt_flags & (fmt_plussign|fmt_space)))
+                                               & (PFX_MUL*(prefix_plus|prefix_space)));
+            /*else signed_flags: if(fmt_flags & fmt_plussign) { fmt_flags += PFX_MUL*prefix_plus;  } // 0,4,8,12 -> 0,2,3,2
+            else               if(fmt_flags & fmt_space)    { fmt_flags += PFX_MUL*prefix_space; }*/
                             //fmt_flags += (fmt_flags&fmt_space) * (PFX_MUL*prefix_space) / fmt_space;
+
             // GNU libc printf ignores '+' and ' ' modifiers on unsigned formats, but curiously, not for %p.
             // Note that '+' overrides ' ' if both are used.
         }
@@ -416,7 +425,7 @@ namespace myprintf
                 const char* start = putbegin;
                 char*      pparam = param;
                 // Make sure that the same content will not be printed twice
-                putbegin = start  + n;
+                //putbegin = start  + n;
                 param    = pparam + n;
                 put(pparam, start, n);
                 //std::printf("As a result, %p has <%.*s>\n", param, n, param);
@@ -425,7 +434,7 @@ namespace myprintf
         void append(const char* source, unsigned length) NOINLINE
         {
             //std::printf("Append %d from <%.*s>\n", length, length, source);
-            if(likely(length != 0))
+            //if(likely(length != 0))
             {
                 if(source != putend)
                 {
@@ -450,26 +459,25 @@ namespace myprintf
         {
             unsigned char prefix_index = (fmt_flags / PFX_MUL) % (FLAG_MUL/PFX_MUL);
             if(unlikely(source == nullptr)) { /* sourcelength = 0; */ prefix_index = prefix_null; }
-            /* There are three possible combinations:
-             *
-             *    Leftalign      prefix, source, spaces
-             *    Zeropad        prefix, zeros,  source
-             *    neither        spaces, prefix, source
-             *
-             * Note that in case of zeropad+leftalign,
-             * zeropad is disregarded according to the standard.
-             */
+
+            // Don't zeropad when there are textual prefixes, or if leftaligning is set
+            if(STRICT_COMPLIANCE && (unlikely(prefix_index >= prefix_nil) || (fmt_flags & fmt_leftalign)))
+            {
+                fmt_flags &= ~fmt_zeropad;
+            }
+
             const char* stringconstants = GetStringConstants<SUPPORT_FLOAT_FORMATS>::GetTable();
-            unsigned char ctrl = stringconstants[2+PatternLength*2 + prefix_data_length-1 + prefix_index/4];
+            unsigned char ctrl = stringconstants[PatternLength*2 + prefix_data_length-1+3 + prefix_index/4];
             unsigned prefixlength = ctrl/32;
-            const char* prefixsource = &stringconstants[2+PatternLength*2-1 + (ctrl%32)];
+            const char* prefixsource = &stringconstants[PatternLength*2-1 + (ctrl%32)];
             const char* prefix = prefixsource;
             if(prefix_index & 3)
             {
                 prefix = prefixbuffer;
-                prefixbuffer[0] = stringconstants[(prefix_index&3)-1];
+                prefixbuffer[0] = stringconstants[(prefix_index&3) + PatternLength*2 + prefix_data_length-1 -1];
                 std::memcpy(&prefixbuffer[1], prefixsource, prefixlength++);
             }
+            stringconstants += PatternLength/fmt_zeropad * (fmt_flags & fmt_zeropad);
 
             // Calculate length of prefix + source
             unsigned combined_length = sourcelength + prefixlength;
@@ -488,37 +496,38 @@ namespace myprintf
                 }
             }
             // Calculate the padding width
-            unsigned pad_flags = min_width > combined_length ? min_width - combined_length : 0;
-            pad_flags |= prefixlength << 27; // max length 7 bytes = 3 bits
-            // Choose the right mode
-            constexpr unsigned flag_prefix_first = 1u << 31;
-            constexpr unsigned flag_source_last  = 1u << 30;
-            constexpr unsigned noflags           = (1u << 27) - 1;
-            // To reduce the register pressure / spilling / compiled binary size,
-            // prefixlength and flags are encoded into the same variable that holds
-            // the padding width (pad_flags).
+            unsigned padding_width = min_width > combined_length ? min_width - combined_length : 0;
 
-            // Note: leftalign overrides zero-padding. Zero-padding also disabled for (nil),(null),nan,inf
-            if(fmt_flags & fmt_leftalign)
-            {
-                pad_flags |= flag_prefix_first;
-            }
-            else if((fmt_flags & fmt_zeropad) && (!STRICT_COMPLIANCE || likely(prefix_index < prefix_nil)))
-            {
-                pad_flags |= flag_prefix_first | flag_source_last;
-                stringconstants += PatternLength; // Zeropad
-            }
-            else
-            {
-                pad_flags |= flag_source_last;
-            }
+            /* There are three possible combinations:
+             *
+             *    Leftalign      prefix, source, spaces
+             *    Zeropad        prefix, zeros,  source
+             *    neither        spaces, prefix, source
+             *
+             * Note that in case of zeropad+leftalign,
+             * zeropad is disregarded according to the standard.
+             */
 
-            // Only local variables needed here: prefix,pad_flags, source,sourcelength, stringconstants
-            if( (pad_flags & flag_prefix_first)) append(prefix, (pad_flags >> 27) & 7);
-            if(!(pad_flags & flag_source_last))  append(source, sourcelength);
-            append_spaces(stringconstants+2, pad_flags & noflags);
-            if(!(pad_flags & flag_prefix_first)) append(prefix, (pad_flags >> 27) & 7);
-            if( (pad_flags & flag_source_last))  append(source, sourcelength);
+            // other(0):     1,2,0 = 1*1+2*4+0*16 = 0x09 (6 bits)
+            // leftalign(1): 2,0,1 = 2*1+0*4+1*16 = 0x12 (6 bits)
+            // zeropad(2):   2,1,0 = 2*1+1*4+0*16 = 0x06 (6 bits)
+            // (invalid)(3): 0,1,2
+            unsigned m = (1*1 + 2*4 + 0*16) * (1)
+                       + (2*1 + 0*4 + 1*16) * ((1u << (8*fmt_leftalign)) + (1u << (8*(fmt_leftalign+fmt_zeropad))))
+                       + (2*1 + 1*4 + 0*16) * ((1u << (8*fmt_zeropad)));
+            m >>= ((fmt_flags&(fmt_leftalign+fmt_zeropad))*8);
+            for(unsigned r=0; r<3; ++r, m>>=2)
+            {
+                if(m&1)      append_spaces(stringconstants,padding_width);
+                else if(m&2) append(prefix, prefixlength);
+                else         append(source, sourcelength);
+            }
+/*
+            if( (fmt_flags & (fmt_leftalign | fmt_zeropad))) append(prefix, prefixlength);
+            if( (fmt_flags & fmt_leftalign))                 append(source, sourcelength);
+            append_spaces(stringconstants, padding_width);
+            if(!(fmt_flags & (fmt_leftalign | fmt_zeropad))) append(prefix, prefixlength);
+            if(!(fmt_flags & fmt_leftalign))                 append(source, sourcelength);*/
         }
     };
 
@@ -621,10 +630,16 @@ namespace myprintf
                         break;
                     case 1:
                         return &table[largest * param_offset_table[which_param_index]];
+                    #ifdef __GNUC__
+                    case 3: // Just collecting parameter counts
+                        break;
+                    default: __builtin_unreachable();
+                    #else
+                    default: break;
+                    #endif
                 }
                 return nullptr;
             };
-
 
             // Start parsing the format string from beginning
             for(const char* fmt = fmt_begin; likely(*fmt != '\0'); ++fmt)
@@ -843,7 +858,7 @@ namespace myprintf
 
                         // Run flush() before we overwrite prefixbuffer/numbuffer,
                         // because putbegin/putend can still refer to that data at this point
-                        state.flush();
+                        state.append(numbuffer,0); //state.flush();
 
                         std::tie(length,fmt_flags) = format_integer(numbuffer, value, fmt_flags, min_width);
                         break;
@@ -871,7 +886,7 @@ namespace myprintf
                     {
                         // Run flush() before we overwrite prefixbuffer/numbuffer,
                         // because putbegin/putend can still refer to that data at this point
-                        state.flush();
+                        state.append(numbuffer,0); //state.flush();
 
                         if(precision == ~0u) precision = 6;
                         if(SUPPORT_LONG_DOUBLE && is_type(long long))
@@ -964,8 +979,12 @@ namespace myprintf
                         }
                         break;
                     }
-                    default:
-                        goto exit_rounds;
+                    #ifdef __GNUC__
+                    case 1: case 0: goto exit_rounds;
+                    default: __builtin_unreachable();
+                    #else
+                    default: goto exit_rounds;
+                    #endif
                 }
                 // Proceed to next round (round 2 or round 1)
                 round = (rndno-1) * MAX_AUTO_PARAMS;
