@@ -199,7 +199,7 @@ namespace myprintf
         return width;
     }
 
-    void put_uinteger(char* target, uintfmt_t uvalue, unsigned width, unsigned char base, char alphaoffset) /*NOINLINE*/
+    void put_uinteger(char* target, uintfmt_t uvalue, unsigned width, unsigned  base, int alphaoffset) /*NOINLINE*/
     {
         for(unsigned w=width; w-- > 0; )
         {
@@ -263,6 +263,13 @@ namespace myprintf
                     if(width>0) fmt_flags += (PFX_MUL*prefix_0x + (fmt_flags&fmt_ucbase)*(PFX_MUL*prefix_0X-PFX_MUL*prefix_0x)/fmt_ucbase);
                     break;
             }*/
+            /*switch((b/2)-4)
+            {
+                case 10/2-4: break;
+                case 8/2-4: ++width; break;
+                case 16/2-4: if(width>0) fmt_flags += (PFX_MUL*prefix_0x + (fmt_flags&fmt_ucbase)*(PFX_MUL*prefix_0X-PFX_MUL*prefix_0x)/fmt_ucbase); break;
+                default: if_constexpr(!SUPPORT_BINARY_FORMAT) __builtin_unreachable(); break;
+            }*/
             if(!(b&7)) {
                 if(b&8)
                     ++width;
@@ -273,7 +280,8 @@ namespace myprintf
 
         // Range check
         width = clamp(width, min_digits, NUMBUFFER_SIZE);
-        put_uinteger(numbuffer, value, width, b, ((fmt_flags & fmt_ucbase) ? 'A' : 'a')-10);
+        //put_uinteger(numbuffer, value, width, b, ((fmt_flags & fmt_ucbase) ? 'A' : 'a')-10);
+        put_uinteger(numbuffer, value, width, b, ('a'-10  -  (('a'-'A')*((fmt_flags & fmt_ucbase)/fmt_ucbase))));
         return {width,fmt_flags};
     }
 
@@ -477,7 +485,11 @@ namespace myprintf
                 prefixbuffer[0] = stringconstants[(prefix_index&3) + PatternLength*2 + prefix_data_length-1 -1];
                 std::memcpy(&prefixbuffer[1], prefixsource, prefixlength++);
             }
-            stringconstants += PatternLength/fmt_zeropad * (fmt_flags & fmt_zeropad);
+
+            //stringconstants += (fmt_flags & fmt_zeropad)?PatternLength:0;
+            //stringconstants = (fmt_flags&fmt_zeropad)? GetStringConstants<SUPPORT_FLOAT_FORMATS>::GetTable()+PatternLength
+            //                                         : GetStringConstants<SUPPORT_FLOAT_FORMATS>::GetTable();
+            stringconstants += PatternLength*(fmt_flags & fmt_zeropad)/fmt_zeropad;
 
             // Calculate length of prefix + source
             unsigned combined_length = sourcelength + prefixlength;
@@ -864,26 +876,28 @@ namespace myprintf
                         break;
                     }
 
-                    case 'A': if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_unk; else { fmt_flags |= fmt_ucbase; } PASSTHRU
+                    case 'A': PASSTHRU
                     case 'a': if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_A_FORMAT) goto got_unk; else {
                               set_base(base_hex);
                               if(precision == ~0u) { } /* TODO: set enough precision for exact representation */
                               fmt_flags |= fmt_exponent;
                               goto got_flt; }
-                    case 'E': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_unk; else { fmt_flags |= fmt_ucbase; } PASSTHRU
+                    case 'E': PASSTHRU
                     case 'e': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_unk; else {
                               // Set up 'e' flags
                               fmt_flags |= fmt_exponent; // Mode: Always exponent
                               goto got_flt; }
-                    case 'G': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_unk; else { fmt_flags |= fmt_ucbase; } PASSTHRU
+                    case 'G': PASSTHRU
                     case 'g': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_unk; else {
                               // Set up 'g' flags
                               fmt_flags |= fmt_autofloat; // Mode: Autodetect
                               goto got_flt; }
-                    case 'F': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_unk; else { fmt_flags |= fmt_ucbase; } PASSTHRU
+                    case 'F': PASSTHRU
                     case 'f': if_constexpr(!SUPPORT_FLOAT_FORMATS) goto got_unk; got_flt:;
                     if_constexpr(SUPPORT_FLOAT_FORMATS)
                     {
+                        fmt_flags |= fmt_ucbase * (~*fmt & 0x20) / 0x20; // for capital letters
+
                         // Run flush() before we overwrite prefixbuffer/numbuffer,
                         // because putbegin/putend can still refer to that data at this point
                         state.append(numbuffer,0); //state.flush();
