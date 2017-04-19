@@ -178,7 +178,7 @@ namespace myprintf
     #define get_type() \
         (fmt_flags / (FLAG_MUL * BASE_MUL)+1)
     #define is_type(type) \
-        (fmt_flags / (FLAG_MUL * BASE_MUL) == sizeof(type)-1)
+        (get_type() == sizeof(type))
 
     inline unsigned clamp(unsigned value, unsigned minvalue, unsigned maxvalue) VERYINLINE;
     inline unsigned clamp(unsigned value, unsigned minvalue, unsigned maxvalue)
@@ -841,23 +841,45 @@ namespace myprintf
                     {
                         intfmt_t value = 0;
 
-                        if(sizeof(long) != sizeof(long long) && is_type(long long)) { GET_ARG(long long,v,2, param_index, continue); value = v; }
-                        else if(sizeof(int) != sizeof(long) && is_type(long))       { GET_ARG(long,v,1, param_index, continue); value = v; }
-                        else
+                        if_constexpr(SUPPORT_H_LENGTHS)
                         {
-                            GET_ARG(int,v,0, param_index, continue);
-                            value = v;
-                            if(SUPPORT_H_LENGTHS && !is_type(int))
-                            {
-                                if(sizeof(int) != sizeof(short) && is_type(short))        { value = (signed short)value; }
-                                else /*if(sizeof(int) != sizeof(char) && is_type(char))*/ { value = (signed char)value; }
-                            }
-                        }
+                            uintfmt_t uvalue;
 
-                        // Strip the sign extension of the value
-                        if(!(fmt_flags & fmt_signed) && get_type() < sizeof(uintfmt_t))
+                            if(sizeof(long) != sizeof(long long) && is_type(long long)) { GET_ARG(unsigned long long,v,2, param_index, continue); uvalue = v; }
+                            else if(sizeof(int) != sizeof(long) && is_type(long))       { GET_ARG(unsigned long,v,1, param_index, continue); uvalue = v; }
+                            else                                                        { GET_ARG(unsigned int,v,0, param_index, continue); uvalue = v; }
+
+                            unsigned m = 8*get_type();
+                            if(m < 8*sizeof(uvalue))
+                            {
+                                // Remove extra bits in case it's necessary (shorts and chars only)
+                                uintfmt_t mask = (uintfmt_t(1) << m);
+                                uvalue &= (mask-1);
+                                // Sign-extend if necessary
+                                if(fmt_flags & fmt_signed)
+                                {
+                                    mask >>= 1;
+                                    uvalue = (uvalue ^ mask) - mask;
+                                }
+                            }
+                            value = uvalue;
+                        }
+                        else // No support for h/hh lengths
                         {
-                            value &= ((uintfmt_t(1) << (8*get_type()))-1);
+                            intfmt_t svalue;
+
+                            if(sizeof(long) != sizeof(long long) && is_type(long long)) { GET_ARG(long long,v,2, param_index, continue); svalue = v; }
+                            else if(sizeof(int) != sizeof(long) && is_type(long))       { GET_ARG(long,v,1, param_index, continue); svalue = v; }
+                            else                                                        { GET_ARG(int,v,0, param_index, continue); svalue = v; }
+
+                            // Remove extra bits if necessary (zero-extend)
+                            unsigned m = 8*get_type();
+                            if((m < 8*sizeof(value)) && !(fmt_flags & fmt_signed))
+                            {
+                                uintfmt_t mask = ((uintfmt_t(1) << m)-1);
+                                svalue &= mask;
+                            }
+                            value = svalue;
                         }
 
                         unsigned min_width = 1;
