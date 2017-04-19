@@ -244,7 +244,7 @@ namespace myprintf
 
         unsigned b = get_base();
         unsigned width = estimate_uinteger_width(value, b);
-        if(STRICT_COMPLIANCE && unlikely(fmt_flags & fmt_alt))
+        if(STRICT_COMPLIANCE && unlikely(fmt_flags & (fmt_alt | fmt_pointer)))
         {
             // Bases: 2   /2 = 1  -1 = 0
             //        8   /2 = 4  -1 = 3
@@ -466,7 +466,6 @@ namespace myprintf
                                   unsigned min_width, unsigned max_width, unsigned fmt_flags) VERYINLINE
         {
             unsigned char prefix_index = (fmt_flags / PFX_MUL) % (FLAG_MUL/PFX_MUL);
-            if(unlikely(source == nullptr)) { /* sourcelength = 0; */ prefix_index = prefix_null; }
 
             // Don't zeropad when there are textual prefixes, or if leftaligning is set
             if(STRICT_COMPLIANCE && (unlikely(prefix_index >= prefix_nil) || (fmt_flags & fmt_leftalign)))
@@ -554,7 +553,7 @@ namespace myprintf
         return def;
     }
 
-    inline unsigned read_param_index(const char*& fmt) VERYINLINE;
+    /*inline unsigned read_param_index(const char*& fmt) VERYINLINE;
     inline unsigned read_param_index(const char*& fmt)
     {
         const char* bkup = fmt;
@@ -562,7 +561,7 @@ namespace myprintf
         if(*fmt == '$') { ++fmt; return index; }
         fmt = bkup;
         return 0;
-    }
+    }*/
 
     template<bool DoOperation> struct auto_dealloc_pointer {};
     template<> struct auto_dealloc_pointer<false> { typedef unsigned char* type; };
@@ -637,14 +636,14 @@ namespace myprintf
                 unsigned short* param_offset_table = reinterpret_cast<unsigned short *>(&table[0]);
                 switch((round / MAX_AUTO_PARAMS) % MAX_ROUNDS)
                 {
-                    case 2:
-                        param_offset_table[which_param_index] = typetag;
-                        break;
-                    case 1:
-                        return &table[largest * param_offset_table[which_param_index]];
+                    // Round 3: Collect parameter counts to know how big array to allocate
+                    // Round 2: Deposit parameter sizes in array that has been allocated
+                    // Round 1: Return pointers to data that has been loaded
+                    // Round 0: Direct loading, this function is not used
+                    case 2: param_offset_table[which_param_index] = typetag; break;
+                    case 1: return &table[largest * param_offset_table[which_param_index]]; break;
                     #ifdef __GNUC__
-                    case 3: // Just collecting parameter counts
-                        break;
+                    case 3: break; // Just collecting parameter counts
                     default: __builtin_unreachable();
                     #else
                     default: break;
@@ -677,7 +676,7 @@ namespace myprintf
 
                 // Read format flags
                 constexpr unsigned got_minwidth  = 0x100u;
-                unsigned fmt_flags = 0, min_width = 0, precision = ~0u;
+                unsigned min_width = 0, precision = ~0u, fmt_flags = 0;
                 // fmt_flags:
                 //    bits 0-7:   state.fmt_flags
                 //    bit 8:      flag: min_width has been read
@@ -709,6 +708,21 @@ namespace myprintf
                  * format string. If there are e.g. flag characters where they
                  * should not be, all sorts of things will go wrong here.
                  */
+
+                /*
+                    '\0'
+                    - +#
+                    0
+                    123456789
+                    $
+                    .
+                    *
+                    tzlLjh
+                    nsc
+                    pxXobdiu
+                    aAeEgGfF
+                    % (((and other)))
+                */
                 switch(*fmt)
                 {
                     case '\0': goto unexpected;
@@ -727,23 +741,27 @@ namespace myprintf
                         // Read min-width or precision
                         unsigned value = read_int(fmt, 0);
                         if(!(fmt_flags & got_minwidth))
-                            { min_width = value; }
+                        {
+                            if_constexpr(SUPPORT_POSITIONAL_PARAMETERS)
+                            {
+                                // If the value is followed by a '$', treat it
+                                // as param_index rather than as min_width.
+                                if(*fmt == '$')
+                                {
+                                    param_index = value;
+                                    // We may have also accidentally read '0' as zeropad flag, so clear it.
+                                    fmt_flags &= ~fmt_zeropad;
+                                    goto moreflags1;
+                                }
+                            }
+                            min_width = value;
+                        }
                         else
-                            { precision = value; }
+                        {
+                            precision = value;
+                        }
                         goto moreflags;
                     }
-                    case '$':
-                    if_constexpr(SUPPORT_POSITIONAL_PARAMETERS)
-                    // If we encounter a lone '$', assume that we just read min_width and possibly a zeropad
-                    // flag, and convert them into a param_index, because we omitted doing read_param_index
-                    // before the loop for space reasons.
-                    {
-                        param_index = min_width;
-                        min_width   = 0;
-                        fmt_flags   &= ~fmt_zeropad;
-                        //fmt_flags = 0; set_sizebase(base_decimal, int);
-                        goto moreflags1;
-                    } else goto got_unk;
 
                     case '.': fmt_flags |= got_minwidth; goto moreflags1;
                     case '*':
@@ -751,12 +769,18 @@ namespace myprintf
                         // Read indirect min-width or precision
                         ++fmt;
 
-                        unsigned opt_index = 0; if_constexpr(SUPPORT_POSITIONAL_PARAMETERS) opt_index = read_param_index(fmt);
+                        unsigned opt_index = 0;
+                        if_constexpr(SUPPORT_POSITIONAL_PARAMETERS)
+                        {
+                            //opt_index = read_param_index(fmt);
+                            opt_index = read_int(fmt, 0);
+                            if(opt_index) /*if(*fmt == '$')*/ ++fmt;
+                        }
                         GET_ARG(int,v,0, opt_index, goto moreflags);
                         if(!(fmt_flags & got_minwidth))
                         {
                             min_width = (v < 0) ? -v : v;
-                            if(v < 0) { fmt_flags |= fmt_leftalign; } // negative value sets left-aligning
+                            fmt_flags |= fmt_leftalign * (v < 0); // negative value sets left-aligning
                         }
                         else
                         {
@@ -767,15 +791,15 @@ namespace myprintf
 
                     // Read possible length modifier.
                     case 't': if_constexpr(!SUPPORT_T_LENGTH) goto got_unk; else {
-                              set_size(std::ptrdiff_t);          goto moreflags1; }
-                    case 'z': set_size(std::size_t);             goto moreflags1;
-                    case 'l': set_size(long);  if(*++fmt != 'l') goto moreflags; PASSTHRU
-                    case 'L': set_size(long long);               goto moreflags1; // Or 'long double'
+                              set_sizebase(base_decimal,std::ptrdiff_t);          goto moreflags1; }
+                    case 'z': set_sizebase(base_decimal,std::size_t);             goto moreflags1;
+                    case 'l': set_sizebase(base_decimal,long);  if(*++fmt != 'l') goto moreflags; PASSTHRU
+                    case 'L': set_sizebase(base_decimal,long long);               goto moreflags1; // Or 'long double'
                     case 'j': if_constexpr(!SUPPORT_J_LENGTH) goto got_unk; else {
-                              set_size(std::intmax_t);           goto moreflags1; }
+                              set_sizebase(base_decimal,std::intmax_t);           goto moreflags1; }
                     case 'h': if_constexpr(!SUPPORT_H_LENGTHS) goto got_unk; else {
-                              set_size(short); if(*++fmt != 'h') goto moreflags; /*PASSTHRU*/
-                              set_size(char);                    goto moreflags1; }
+                              set_sizebase(base_decimal,short); if(*++fmt != 'h') goto moreflags; /*PASSTHRU*/
+                              set_sizebase(base_decimal,char);                    goto moreflags1; }
 
                     // Read the format type
 
@@ -786,6 +810,12 @@ namespace myprintf
                         GET_ARG(void*,pointer,3, param_index, continue);
 
                         auto value = state.param - param;
+                    #if defined(__ARMEL__) || defined(__i386) || defined(__x86_64) || __BYTE_ORDER__==__ORDER_LITTLE_ENDIAN
+                        // This loop is a great deal shorter code, but slower (does not matter
+                        // really for %n), and endian sensitive (that's what the #ifdef is for).
+                        for(unsigned m=get_type(), n=0; n<m; ++n, value>>=8)
+                            ((unsigned char*)pointer)[n] = value;
+                    #else
                         if(!is_type(int))
                         {
                             if(sizeof(int) != sizeof(long) && is_type(long))  { *static_cast<long*>(pointer) = value; }
@@ -797,6 +827,7 @@ namespace myprintf
                                  && is_type(long long))*/                     { *static_cast<long long*>(pointer) = value; }
                         }
                         else                                                  { *static_cast<int*>(pointer) = value; }
+                    #endif
                         continue; // Nothing to format
                     } else goto got_unk;
 
@@ -810,6 +841,10 @@ namespace myprintf
                         {
                             length = std::strlen(source);
                             // Only calculate length on non-null pointers
+                        }
+                        else
+                        {
+                            fmt_flags |= (PFX_MUL*prefix_null);
                         }
 
                         // precision is treated as maximum width
@@ -831,11 +866,12 @@ namespace myprintf
                     }
 
                     // Pointer and integer formats
-                    case 'p': { fmt_flags |= fmt_alt | fmt_pointer; set_sizebase(base_hex, void*); goto got_int; }
-                    case 'X': { fmt_flags |= fmt_ucbase; }          PASSTHRU
-                    case 'x': {                                     set_base(base_hex);   goto got_int; }
-                    case 'o': {                                     set_base(base_octal); goto got_int; }
-                    case 'b': if_constexpr(!SUPPORT_BINARY_FORMAT) goto got_unk; else { set_base(base_binary); goto got_int; }
+                    case 'p': { fmt_flags |= fmt_pointer;  set_sizebase(base_hex, void*); goto got_int; }
+                    case 'X': { fmt_flags |= fmt_ucbase; } PASSTHRU
+                    case 'x': {                            set_base(base_hex);   goto got_int; }
+                    case 'o': {                            set_base(base_octal); goto got_int; }
+                    case 'b': if_constexpr(!SUPPORT_BINARY_FORMAT) goto got_unk;
+                              else                       { set_base(base_binary); goto got_int; }
                     case 'd': case 'i': { fmt_flags |= fmt_signed; } PASSTHRU
                     case 'u': got_int:
                     {
@@ -850,7 +886,7 @@ namespace myprintf
                             else                                                        { GET_ARG(unsigned int,v,0, param_index, continue); uvalue = v; }
 
                             unsigned m = 8*get_type();
-                            if(m < 8*sizeof(uvalue))
+                            if(m < 8*sizeof(value))
                             {
                                 // Remove extra bits in case it's necessary (shorts and chars only)
                                 uintfmt_t mask = (uintfmt_t(1) << m);
@@ -882,11 +918,11 @@ namespace myprintf
                             value = svalue;
                         }
 
-                        unsigned min_width = 1;
+                        unsigned min_digits = 1;
                         if(precision != ~0u)
                         {
                             if_constexpr(STRICT_COMPLIANCE) { fmt_flags &= ~fmt_zeropad; }
-                            min_width = precision;
+                            min_digits = precision;
                             precision = ~0u; // No max-width
                         }
 
@@ -894,7 +930,7 @@ namespace myprintf
                         // because putbegin/putend can still refer to that data at this point
                         state.append(numbuffer,0); //state.flush();
 
-                        std::tie(length,fmt_flags) = format_integer(numbuffer, value, fmt_flags, min_width);
+                        std::tie(length,fmt_flags) = format_integer(numbuffer, value, fmt_flags, min_digits);
                         break;
                     }
 
@@ -1003,14 +1039,19 @@ namespace myprintf
                             unsigned char* tgt = &table[largest * offset];
                             switch(typecode)
                             {
-                                default:{ type0:; *(int*)tgt = va_arg(ap,int);     break; }
+                                case 0: { type0:; *(int*)tgt = va_arg(ap,int);     break; }
                                 case 1: { *(long*)tgt      = va_arg(ap,long);      break; }
                                 case 2: { *(long long*)tgt = va_arg(ap,long long); break; }
                                 case 3: { *(void**)tgt     = va_arg(ap,void*);     break; }
-                                case 4: if_constexpr(!SUPPORT_FLOAT_FORMATS) { goto type0; } else
+                                case 4: if_constexpr(!SUPPORT_FLOAT_FORMATS) { goto unreach; } else
                                         { *(double*)tgt    = va_arg(ap,double);    break; }
-                                case 5: if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_LONG_DOUBLE) { goto type0; } else
+                                case 5: if_constexpr(!SUPPORT_FLOAT_FORMATS || !SUPPORT_LONG_DOUBLE) { goto unreach; } else
                                         { *(long double*)tgt = va_arg(ap,long double); break; }
+                                #ifdef __GNUC__
+                                default: unreach: __builtin_unreachable(); goto type0;
+                                #else
+                                default: unreach: goto type0;
+                                #endif
                             }
                         }
                         break;
