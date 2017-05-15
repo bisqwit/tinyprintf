@@ -96,8 +96,8 @@ namespace myprintf
     static constexpr unsigned char fmt_space     = 0x08; // ' '
     static constexpr unsigned char fmt_alt       = 0x10; // '#'
     static constexpr unsigned char fmt_ucbase    = 0x20; // capital hex (%X)
-    static constexpr unsigned char fmt_signed    = 0x40; // d,i,p formats
-    static constexpr unsigned char fmt_pointer   = 0x80; // p format
+    static constexpr unsigned char fmt_pointer   = 0x40; // p format
+    static constexpr unsigned char fmt_signed    = 0x80; // d,i,p formats
     static constexpr unsigned char fmt_exponent  = 0x40;
     static constexpr unsigned char fmt_autofloat = 0x80;
 
@@ -270,10 +270,10 @@ namespace myprintf
                 case 16/2-4: if(width>0) fmt_flags += (PFX_MUL*prefix_0x + (fmt_flags&fmt_ucbase)*(PFX_MUL*prefix_0X-PFX_MUL*prefix_0x)/fmt_ucbase); break;
                 default: if_constexpr(!SUPPORT_BINARY_FORMAT) __builtin_unreachable(); break;
             }*/
-            if(!(b&7)) {
-                if(b&8)
+            if(!(b&7)) { // bases 8 or 16 only
+                if(b&8) // base 8
                     ++width;
-                else
+                else // base 16
                     if(width>0) fmt_flags += (PFX_MUL*prefix_0x + (fmt_flags&fmt_ucbase)*(PFX_MUL*prefix_0X-PFX_MUL*prefix_0x)/fmt_ucbase);
             }
         }
@@ -855,6 +855,8 @@ namespace myprintf
                     case 'c':
                     {
                         GET_ARG(int,c,0, param_index, continue);
+
+                        state.append(numbuffer,0); //state.flush();
 
                         numbuffer[0] = static_cast<char>(c);
                         length = 1;

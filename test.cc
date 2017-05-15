@@ -144,6 +144,10 @@ int main()
     RunTest("%.2s%.2s", "test","more");
     RunTest("%4.02d", 3);
     RunTest("%4.02s", "test");
+    { char a = 'A', b = 'B', c = 'C';
+    RunTest("%c%c%c", a,b,c);
+    RunTest("%d%d%d", a,b,c);
+    }
 
     RunTest("%d%%%d", 1234,5678);
     RunTest("%d%%%s", 1234,"test");
