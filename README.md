@@ -1,44 +1,43 @@
 # tinyprintf
+A lightweight, fully-featured `printf` replacement designed for embedded programming and resource-constrained
+environments, written as a single linkable C++ file.
 
-`printf-c.cc` is a C++ module that replaces certain C-language libc functions
-with a tiny alternatives suitable for embedded programs.
+## Features at a Glance
 
-The functions replaced are
-`printf`,
-`vprintf`,
-`sprintf`,
-`vsprintf`,
-`puts`,
-`putchar`,
-`fprintf`¹,
-`vfprintf`¹,
-`fiprintf`¹ ⁴,
-`fputs`¹,
-`fputc`¹,
-`fflush`¹,
-`fwrite`¹,
-`snprintf`²,
-`vsnprintf`²,
-`asprintf`³, and
-`vasprintf`³,
+* **C99 & C++14 Compliant** format string parsing.
+* **Optional Positional Parameters** (SUSv2 style, e.g., `%2$s`).
+* **No File I/O Overhead:** Designed to write straight into custom output functions (like a UART/serial port) or memory buffers (`snprintf` / `asprintf`).
+* **GCC Optimization Friendly:** Works seamlessly with GCC's automatic string optimizations (`printf("abc\n")` → `puts("abc")`).
+* Design is optimized for code size
+* Memory usage is negligible (around 30-200 bytes of automatic storage used, depending on compiler optimizations, register pressure and spilling, and whether binary formats are enabled)
+  * If positional parameters are enabled and used, a dynamically allocated array is used to temporarily hold parameter information. The size of the array is directly proportional to the number of printf parameters. Each parameter takes about 10 bytes of memory (assuming the largest supported parameter is 64 bits wide). This memory is allocated using the `new` keyword in C++. If positional parameters are not enabled, dynamic memory is not allocated.
+* Re-entrant code (e.g. it is safe to call `sprintf` within your stream I/O function invoked by `printf`)
+* Thread-safe as long as your wfunc is thread-safe. `printf` calls are not locked, so prints from different threads can interleave.
+* Positional parameters are fully supported (e.g. `printf("%2$s %1$0*3$ld", 5L, "test", 4);` works and prints “test 0005”), disabled by default
 
-* ¹) Only if SUPPORT_FILE_FUNCTIONS is #defined
-* ²) Only if SUPPORT_SNPRINTF is #defined
-* ³) Only if SUPPORT_ASPRINTF is #defined
-* ⁴) Only if SUPPORT_FIPRINTF is #defined
+## Rationale & Design Goals
+
+* This module was designed for use with mbed-enabled programming, and to remove any dependencies to stdio (specifically FILE stream facilities) in the linkage, reducing the binary size.
+  * And perhaps a tiny bit of “we do what we must, because we can”.
+
+## Getting Started & Integration
 
 To use, compile `printf-c.cc` using your C++ compiler, and link it into your project.
 You will have to add the following linker flags:
 
-    -Wl,--wrap,printf  -Wl,--wrap,fprintf  -Wl,--wrap,sprintf   -Wl,--wrap,asprintf    
-    -Wl,--wrap,vprintf -Wl,--wrap,vfprintf -Wl,--wrap,vsprintf  -Wl,--wrap,vasprintf    
-    -Wl,--wrap,puts    -Wl,--wrap,putchar  -Wl,--wrap,snprintf  -Wl,--wrap,fwrite    
-    -Wl,--wrap,fputs   -Wl,--wrap,fputc    -Wl,--wrap,vsnprintf -Wl,--wrap,fflush    
-    -Wl,--wrap,fiprintf
+```sh
+-Wl,--wrap,printf   -Wl,--wrap,fprintf   -Wl,--wrap,sprintf    -Wl,--wrap,asprintf    \
+-Wl,--wrap,vprintf  -Wl,--wrap,vfprintf  -Wl,--wrap,vsprintf   -Wl,--wrap,vasprintf   \
+-Wl,--wrap,puts     -Wl,--wrap,putchar   -Wl,--wrap,snprintf   -Wl,--wrap,fwrite      \
+-Wl,--wrap,fputs    -Wl,--wrap,fputc     -Wl,--wrap,vsnprintf  -Wl,--wrap,fflush      \
+-Wl,--wrap,fiprintf
+```
 
 What `-Wl,--wrap,somefunc` does it replaces all calls to `somefunc` with calls to `__wrap_somefunc`,
 and all calls to `__real_somefunc` with calls to the original `somefunc`.
 It is handy when you need to replace a library function that is not declared “weak”.
+
+## Recommended Compiler & Linker Flags
 
 GNU build tools are probably required.
 
@@ -49,7 +48,67 @@ Compiling with `-fbuiltin` is supported.
 *IMPORTANT*: You will have to edit printf-c.cc file, locate `wfunc`,
 and replace that function with code that is suitable for your project.
 
-## Format string
+## Configuration & Compile-Time Options
+
+Near the top of `printf-c.cc`, there are the following configurable options,
+that control which features will be supported.
+
+Note that although there is a setting for floating-point formats,
+these are not currently well supported.
+
+```c
+#define SUPPORT_SNPRINTF
+//#define SUPPORT_ASPRINTF
+//#define SUPPORT_FIPRINTF
+#define SUPPORT_FILE_FUNCTIONS /* Whether to support fprintf, fwrite etc. */
+
+static constexpr bool SUPPORT_BINARY_FORMAT = false;// Whether to support %b format type
+static constexpr bool STRICT_COMPLIANCE     = true;
+static constexpr bool SUPPORT_N_FORMAT      = true; // Whether to support %n format type
+static constexpr bool SUPPORT_H_LENGTHS     = true; // Whether to support h and hh length modifiers
+static constexpr bool SUPPORT_T_LENGTH      = true; // Whether to support t length modifier
+static constexpr bool SUPPORT_J_LENGTH      = true; // Whether to support j length modifier
+static constexpr bool SUPPORT_FLOAT_FORMATS = false; // Floating pointing formats
+static constexpr bool SUPPORT_A_FORMAT      = false; // Floating point hex format
+static constexpr bool SUPPORT_LONG_DOUBLE   = false;
+static constexpr bool SUPPORT_POSITIONAL_PARAMETERS = false;
+```
+
+## Standard library dependencies
+
+* **Functions:** `std::ceil`¹, `std::floor`¹, `std::frexp`¹, `std::isfinite`¹, `std::isinf`¹, `std::log10`¹, `std::malloc`², `std::max`, `std::memcpy`, `std::min`, `std::modf`¹, `std::pow`¹, `std::round`¹, `std::strlen`, `std::tie`, 
+* **Types:** `std::FILE*`³, `std::int_fast64_t`, `std::intmax_t`, `std::pair`, `std::ptrdiff_t`, `std::size_t`, `std::uint_fast64_t`, `std::unique_ptr`⁴, `std::va_list`
+* **Operators:** `new`⁴
+
+## Replaced functions
+
+Depending on enabled macros, `tinyprintf` intercepts and replaces:  
+`printf`,
+`vprintf`,
+`sprintf`,
+`vsprintf`,
+`puts`,
+`putchar`,
+`fprintf`³,
+`vfprintf`³,
+`fiprintf`³ ⁶,
+`fputs`³,
+`fputc`³,
+`fflush`³,
+`fwrite`³,
+`snprintf`⁵,
+`vsnprintf`⁵,
+`asprintf`², and
+`vasprintf`².
+
+1) Only used if SUPPORT_FLOAT_FORMATS is enabled, but declarations are needed in either case  
+2) Only if SUPPORT_ASPRINTF is #defined  
+3) Only if SUPPORT_FILE_FUNCTIONS is #defined  
+4) Only used if SUPPORT_POSITIONAL_PARAMETERS is enabled, but declaration is needed in either case  
+5) Only if SUPPORT_SNPRINTF is #defined  
+6) Only if SUPPORT_FIPRINTF is #defined  
+
+## Format String
 
 The format string format is fully compliant with C99 and C++14,
 with positional parameters supported optionally according to SUSv2:
@@ -93,17 +152,6 @@ Where
   * Format types `"S"` and `"C"`, defined by SUSv2, are not supported
   * Format type `"m"`, defined by glibc, is not supported
 
-## Features
-
-* Design is optimized for code size
-* Standards-compliant (C99 / C++11), see above for details
-* Memory usage is negligible (around 30-200 bytes of automatic storage used, depending on compiler optimizations, register pressure and spilling, and whether binary formats are enabled)
-  * If positional parameters are enabled and used, a dynamically allocated array is used to temporarily hold parameter information. The size of the array is directly proportional to the number of printf parameters. Each parameter takes about 10 bytes of memory (assuming the largest supported parameter is 64 bits wide).
-* Re-entrant code (e.g. it is safe to call `sprintf` within your stream I/O function invoked by `printf`)
-* Thread-safe as long as your wfunc is thread-safe. `printf` calls are not locked, so prints from different threads can interleave.
-* Compatible with GCC’s optimizations where e.g. `printf("abc\n")` is automatically converted into `puts("abc")`
-* Positional parameters are fully supported (e.g. `printf("%2$s %1$0*3$ld", 5L, "test", 4);` works and prints “test 0005”), disabled by default
-
 ## Caveats
 
 * Stream I/O errors are not handled
@@ -114,22 +162,17 @@ Where
 * `wprintf`, `fwprintf`, `swprintf`, `vwprintf`, `vfwprintf`, and `vswprintf` are not supported (C99, C++98)
 * `printf_s`, `fprintf_s`, `sprintf_s`, `snprintf_s`, `vprintf_s`, `vfprintf_s`, `vsprintf_s`, `vsnprintf_s`, `wprintf_s`, `fwprintf_s`, `swprintf_s`, `snwprintf_s`, `vwprintf_s`, `vfwprintf_s`, `vswprintf_s`, and `vsnwprintf_s` are not supported (C11).
 * Behavior differs to GNU libc printf when a nul pointer is printed with `p` or `s` formats and max-width specifier is used
-* If positional parameters are enabled, there may be a maximum of 1023 parameters to printf.⁵
+* If positional parameters are enabled, there may be a maximum of 1023 parameters to printf.⁷
 * `vsnprintf` and `snprintf` are thread-safe only if your compiler honors the `thread_local` attribute.
 * If positional parameters are enabled, the format string can be scanned up to three times. If positional parameters are enabled but not used in the format string, no dynamic allocation occurs, but the format string is still scanned twice.
 
-⁵) If you really need more than this, edit MAX_EXPLICIT_PARAMS and MAX_AUTO_PARAMS in printf-c.cc. Their product should be less 2³²/MAX_ROUNDS.
+* ⁷) If you really need more than this, edit MAX_EXPLICIT_PARAMS and MAX_AUTO_PARAMS in printf-c.cc. Their product should be less 2³²/MAX_ROUNDS.
 
 ## Known bugs
 
-* Floating point support (formats `e`, `E`, `f`, `F`, `g`, `G`, `a`, and `A`) is all sorts of broken and disabled by default
-
-## Rationale
-
-* This module was designed for use with mbed-enabled programming, and to remove any dependencies to stdio (specifically FILE stream facilities) in the linkage, reducing the binary size.
-  * And perhaps a tiny bit of “we do what we must, because we can”.
+* Floating point support (formats `e`, `E`, `f`, `F`, `g`, `G`, `a`, and `A`) is all sorts of broken and disabled by default.
 
 ## Author
 
-Copyright © Joel Yliluoma 2017. (http://iki.fi/bisqwit/)    
+Copyright © Joel Yliluoma 2017. (https://iki.fi/bisqwit/)    
 Distribution terms: MIT
